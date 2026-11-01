@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -12,6 +13,11 @@ import (
 
 // MaxClockSkew is how far ahead of local time a block timestamp may be.
 const MaxClockSkew = 5 * time.Minute
+
+// MaxBlockBytes caps a block's JSON. It must stay below what nodes accept when a
+// block is pushed to them (16 MiB, and the same in nginx) or a valid block could
+// never spread: producers stop filling a block here and leave the rest pending.
+const MaxBlockBytes = 8 << 20
 
 // PayloadInfo describes a payload that passed validation.
 type PayloadInfo struct {
@@ -138,6 +144,9 @@ func (p *Params) ValidateBlock(b *Block, parent Parent, now time.Time) (*State, 
 	hash := b.Hash()
 	if !ecdsa.VerifyASN1(parent.State.Keys[h.Signer], hash[:], sig) {
 		return nil, errors.New("block signature is invalid")
+	}
+	if raw, err := json.Marshal(b); err != nil || len(raw) > MaxBlockBytes {
+		return nil, fmt.Errorf("block is larger than %d bytes", MaxBlockBytes)
 	}
 	at := time.Unix(h.Time, 0)
 	seen := map[Hash]bool{}

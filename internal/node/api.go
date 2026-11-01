@@ -16,6 +16,10 @@ import (
 	"eidchain/internal/webapp"
 )
 
+// maxBlocksResponse is how much block data one answer carries. It must leave room
+// under remote's 64 MiB response limit for one more block of up to 8 MiB.
+const maxBlocksResponse = 32 << 20
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -168,9 +172,16 @@ func (n *Node) handleBlocks(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	bs := n.store.Range(from, limit)
-	if bs == nil {
-		bs = []*chain.Block{}
+	// Blocks can be large: answer with fewer than asked rather than more than a
+	// client will read. Clients continue from where the answer stopped.
+	bs := []*chain.Block{}
+	size := 0
+	for _, b := range n.store.Range(from, limit) {
+		raw, _ := json.Marshal(b)
+		if size += len(raw); size > maxBlocksResponse && len(bs) > 0 {
+			break
+		}
+		bs = append(bs, b)
 	}
 	writeJSON(w, 200, bs)
 }

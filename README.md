@@ -20,7 +20,7 @@ The repository also holds the website that runs at `eidchain.ivoras.net` (`www/`
 - **Configurable eID CAs.** The trusted CA certificates are chosen when a chain is created (default: the Croatian AKDCA Root, HRIDCA and HRIDCA 2025, embedded). Certificates from other EU countries can be added in the config file.
 - **OCSP at submission.** When a payload is submitted, the node asks the signer certificate's OCSP responder and fails closed. The signed OCSP response is stored in the block next to the payload so anyone can audit it later (it is committed to by the block hash but is *not* a block validity rule, because revocation answers change over time).
 - **Gossip and pull.** Nodes push new blocks, payloads and rotation approvals to configured peers and also pull from them periodically. `eidchain pull` downloads a chain from a running node with `docker pull` semantics: you name the chain by its genesis hash, everything is verified locally from the genesis, and a repeated pull fetches only what is new.
-- **Block production every 10 minutes.** If any payloads are waiting, an authority node cuts a block on every 10-minute wall-clock boundary, regardless of how many payloads there are.
+- **Block production every 10 minutes.** If any payloads are waiting, an authority node cuts a block on every 10-minute wall-clock boundary, regardless of how few payloads there are. A block holds at most 8 MiB; anything beyond that waits for the next one.
 - **Example web app and explorer.** Anyone can type a message, sign it with their eID card in the browser, and add it to the next block. No accounts. A built-in explorer shows blocks, messages (with the signer's certificate and OCSP result), authority keys and rotations, with search, behind a shared nav bar.
 - **Strict JSON.** Duplicate keys and case-variant field names are refused everywhere, so a document cannot be read two ways.
 - **PII-free logs.** Success paths never log signer names, certificate serials or client addresses; error handlers do, because that is what debugging needs.
@@ -140,7 +140,7 @@ A node accepts a block only if all of these hold:
 0. The JSON it arrived in is unambiguous (no duplicate keys, exact-case field names, no unknown fields).
 1. It builds on a known parent, height is parent + 1, and `time` is not before the parent's and not more than 5 minutes in the future.
 2. The signer is an authority **in the parent's authority state** and did not sign any of the previous `floor(N/2)` blocks. The block signature is valid.
-3. `payloadCount`, `rotationCount`, `payloadsRoot` and `rotationsRoot` match the body.
+3. `payloadCount`, `rotationCount`, `payloadsRoot` and `rotationsRoot` match the body, and the block's JSON is at most 8 MiB.
 4. Every payload: valid UTF-8, a JSON object with no duplicate or case-variant keys at any level, within the size cap; a valid detached CAdES-B-B signature (RSA PKCS#1 v1.5 or ECDSA with SHA-256/384/512; RSA-PSS is not supported); the signer certificate chains to the genesis trust anchors **judged at the block's timestamp**; non-repudiation key usage if the genesis requires it; no payload that already appears in the block or in its ancestors.
 5. Every rotation: for this chain, `seq` equals the number of rotations applied so far (no replays), replaces a current authority with a new P-256 key that is not already one, and carries valid approvals from at least `rotationQuorum` distinct keys of the parent's state.
 
@@ -349,7 +349,7 @@ All under `/api/v1`, JSON, CORS open. There is no authentication: every write ne
 | `GET /info` | Status: genesis hash, height, head, authorities, pending counts, next block time, trust anchors |
 | `GET /genesis` | The genesis document |
 | `GET /hashes/{height}` | Canonical block hash at a height |
-| `GET /blocks?from=H&limit=N` | Canonical blocks from height `H` (limit up to 200) |
+| `GET /blocks?from=H&limit=N` | Canonical blocks from height `H` (limit up to 200; may return fewer, up to about 32 MiB) |
 | `GET /blocks/{hash}` | Any stored block |
 | `POST /blocks` | Push a block (gossip); answers `added`, `known`, or `unknown-parent` |
 | `POST /payloads` | Submit `{"payload": "...", "signature": "<base64 CAdES>"}`. Checks the signature, the certificate chain and OCSP; 422 on rejection |

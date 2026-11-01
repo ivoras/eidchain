@@ -105,9 +105,12 @@ func (c *Client) fetch(ctx context.Context, method, path string, in any) (int, [
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if err != nil {
 		return resp.StatusCode, nil, err
+	}
+	if len(raw) > maxResponse {
+		return resp.StatusCode, nil, fmt.Errorf("response from %s is larger than %d bytes", c.Base, maxResponse)
 	}
 	if resp.StatusCode/100 != 2 {
 		var e struct {

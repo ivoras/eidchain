@@ -7,6 +7,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -559,5 +560,37 @@ func TestUnsignedRotationIsRefused(t *testing.T) {
 	}
 	if got := n.rots.List(); len(got) != 0 {
 		t.Fatalf("%d unsigned proposal(s) were pooled", len(got))
+	}
+}
+
+func TestBlocksStayWithinTheSizeLimit(t *testing.T) {
+	n, card, _ := newSoloNode(t)
+	filler := strings.Repeat("x", 8000)
+	mk := func(i int) chain.PayloadEntry {
+		p := fmt.Sprintf(`{"n":%d,"text":%q}`, i, filler)
+		return chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, card, []byte(p)))}
+	}
+	// Enough entries to exceed the limit, using one large OCSP-free signature size.
+	first := mk(0)
+	per := len(first.Payload) + len(first.Signature)
+	count := chain.MaxBlockBytes/per + 50
+	for i := 0; i < count; i++ {
+		e := mk(i)
+		if _, err := n.pool.Add(poolItem{Entry: e}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n.produce()
+	head, height := n.store.Head()
+	if height != 1 {
+		t.Fatalf("height %d", height)
+	}
+	b, _ := n.store.Block(head)
+	raw, _ := json.Marshal(b)
+	if len(raw) > chain.MaxBlockBytes {
+		t.Fatalf("block is %d bytes", len(raw))
+	}
+	if n.pool.Len() == 0 {
+		t.Fatal("nothing was left for the next block")
 	}
 }

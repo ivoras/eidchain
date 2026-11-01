@@ -5,6 +5,7 @@ package node
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -285,7 +286,10 @@ func (n *Node) eligibleSigner(parent chain.Parent) (chain.Signer, bool) {
 	return chain.Signer{}, false
 }
 
-// produce cuts a block from all pending payloads and ready rotations, if any.
+// blockOverhead is a safe bound on a block's JSON apart from its payloads and rotations.
+const blockOverhead = 2048
+
+// produce cuts a block from pending payloads and ready rotations, if any.
 func (n *Node) produce() {
 	parent := n.store.HeadParent()
 	rots := n.rots.Ready(n.store.P, parent.State)
@@ -314,6 +318,11 @@ func (n *Node) produce() {
 	}
 	var entries []chain.PayloadEntry
 	drop := map[chain.Hash]bool{}
+	size := blockOverhead
+	for _, r := range rots {
+		raw, _ := json.Marshal(r)
+		size += len(raw) + 1
+	}
 	for _, it := range items {
 		id := it.Entry.ID()
 		if n.store.OnChain(id) {
@@ -325,6 +334,11 @@ func (n *Node) produce() {
 			drop[id] = true
 			continue
 		}
+		raw, _ := json.Marshal(it.Entry)
+		if size+len(raw)+1 > chain.MaxBlockBytes {
+			break // the rest stays pending for the next block
+		}
+		size += len(raw) + 1
 		entries = append(entries, it.Entry)
 	}
 	if len(drop) > 0 {
