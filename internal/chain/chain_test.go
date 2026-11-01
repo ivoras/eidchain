@@ -428,3 +428,21 @@ func TestRecordIdentity(t *testing.T) {
 		t.Error("re-signing the same text gave a new record ID")
 	}
 }
+
+func TestOnlyListedCAsAreTrusted(t *testing.T) {
+	e := newEnv(t, 3)
+	rootOnly, err := chain.NewTrustStore([]string{e.pki.RootPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rootOnly.Verify(e.card.Cert, time.Now()); err == nil {
+		t.Error("a certificate from an unlisted intermediate was trusted")
+	}
+	both, err := chain.NewTrustStore([]string{e.pki.RootPEM, e.pki.InterPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := both.Verify(e.card.Cert, time.Now()); err != nil {
+		t.Error(err)
+	}
+}

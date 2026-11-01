@@ -173,7 +173,7 @@ Once the quorum is reached, the next block a node cuts includes the rotation. Pu
 
 ### Which eID certificates are accepted
 
-Payload signatures are checked against the CA certificates in the genesis block. They are chosen **when the chain is created**, because every node must apply the same rules; a node cannot change them locally. Choose them with, in order of precedence:
+Payload signatures are checked against the CA certificates in the genesis block. List every issuing CA as well as the root: intermediates embedded in a signature are ignored, so a certificate from a CA the genesis does not name is refused even if it is under a trusted root. They are chosen **when the chain is created**, because every node must apply the same rules; a node cannot change them locally. Choose them with, in order of precedence:
 
 1. `eidchain genesis --trust-ca FILE` (repeatable; `builtin:hr` names the embedded AKD CA bundle),
 2. `trustCAs` in `<data>/config.json`,

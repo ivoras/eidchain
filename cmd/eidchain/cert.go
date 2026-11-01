@@ -59,7 +59,7 @@ func cmdCert(args []string) error {
 		}
 		fmt.Printf("  %s (key id %x)%s\n", chain.CertName(a), a.SubjectKeyId, match)
 	}
-	switch err := p.Trust.Verify(c, nil, time.Now()); {
+	switch err := p.Trust.Verify(c, time.Now()); {
 	case err != nil:
 		fmt.Printf("\nNOT trusted: %v\n", err)
 		if len(c.IssuingCertificateURL) > 0 {

@@ -137,7 +137,7 @@ func (t *TrustStore) Explain(c *x509.Certificate, extra []*x509.Certificate) []s
 		}
 		out = append(out, fmt.Sprintf("embedded cert[%d] (%s): %s", i, rel, DescribeCert(e)))
 	}
-	if err := t.Verify(c, extra, time.Now()); err != nil {
+	if err := t.Verify(c, time.Now()); err != nil {
 		out = append(out, "path verification now: "+err.Error())
 	} else {
 		out = append(out, "path verification now: ok")

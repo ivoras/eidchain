@@ -56,19 +56,14 @@ func NewTrustStore(pems []string) (*TrustStore, error) {
 	return t, nil
 }
 
-// Verify checks that cert chains to a trusted root, judged at time at (the
-// block's timestamp, so validation is deterministic). extra are untrusted
-// intermediates taken from the signature.
-func (t *TrustStore) Verify(cert *x509.Certificate, extra []*x509.Certificate, at time.Time) error {
-	inter := t.inter.Clone()
-	for _, c := range extra {
-		if c != cert {
-			inter.AddCert(c)
-		}
-	}
+// Verify checks that cert chains to a trusted root through CAs listed in the
+// genesis, judged at time at (the block's timestamp, so validation is
+// deterministic). Intermediates embedded in a signature are deliberately not used:
+// they would admit every CA under a root, not just the ones the genesis names.
+func (t *TrustStore) Verify(cert *x509.Certificate, at time.Time) error {
 	_, err := cert.Verify(x509.VerifyOptions{
 		Roots:         t.roots,
-		Intermediates: inter,
+		Intermediates: t.inter,
 		CurrentTime:   at,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	})

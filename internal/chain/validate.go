@@ -50,7 +50,7 @@ func (p *Params) VerifyPayload(e PayloadEntry, at time.Time) (*PayloadInfo, erro
 	if err != nil {
 		return nil, fmt.Errorf("signature: %w", err)
 	}
-	if err := p.Trust.Verify(s.Cert, s.Certs, at); err != nil {
+	if err := p.Trust.Verify(s.Cert, at); err != nil {
 		return nil, fmt.Errorf("signer certificate not trusted: %w (issuer %q; the genesis trusts %s; the issuer's certificate may be published at %v)",
 			err, CertName2(s.Cert.Issuer.CommonName, s.Cert.Issuer.Organization), p.Trust.Names(), s.Cert.IssuingCertificateURL)
 	}
