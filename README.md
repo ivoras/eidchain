@@ -498,8 +498,41 @@ If a key ever does get pushed, treat it as compromised: rotate it (see [Key rota
 - **Trust anchors are fixed by the genesis.** Changing them means a new chain.
 - **Only replacement rotations.** The authority count stays constant; adding or removing authorities is not implemented.
 - **Peer discovery is minimal.** Nodes learn peers from the ones they already have (see [Peers and peer exchange](#peers-and-peer-exchange)), but there is no bootstrap list or DNS discovery: a new node needs at least one peer address to start from.
-- **Whole chain in memory.** Fine for a PoC.
+- **Whole chain in memory.** Fine for a PoC; see [Future Plans](#future-plans).
 - **No access control, and rate limiting only in nginx.** The pending pool is capped at 5000 payloads, but one card can fill it.
+
+## Future Plans
+
+### Keep only the tip of the chain in memory
+
+Today a node holds every block it has seen in memory, in full, and verifies them all again at startup, so memory use and startup time grow with the chain. A node does not need that to work: message text, signatures, certificates, OCSP responses and timestamp tokens can stay on disk until something asks for them.
+
+The plan is to keep two things in memory.
+
+**A small window near the tip.** Reorganisations are limited to 64 blocks, so older blocks can no longer change. For the last 65 or so canonical blocks, plus any side branches off them, a node keeps:
+
+- the hash, parent hash, height, time and signer
+- whether the block carries a rotation
+- the payload IDs
+- the authority state, shared between blocks because it changes only on rotations
+
+**Lightweight indexes for older blocks.**
+
+| Index | Used for |
+| --- | --- |
+| Height to block hash | `/hashes`, `/blocks` and finding the fork point during sync |
+| Block hash to height | Checking whether a block is known, and lookups by hash |
+| Payload ID to height | The rule against repeating a payload, and finding messages |
+
+These take a few hundred bytes per block and message, so about 10 MB a year for one small message per block at the default block interval, compared with about 300 MB today. They could later move to an embedded database for a roughly constant memory footprint, at the cost of a disk read on most lookups and a new dependency.
+
+This needs a few supporting changes:
+
+- **Startup:** save a checkpoint of the head, the authority state and the indexes, so a restart does not verify every block again. `eidchain verify` stays a full replay from the genesis, reading blocks from disk one at a time.
+- **Block access:** the API and explorer read blocks from disk through a small cache. Reorganisations do the same to return orphaned messages to the pending pool.
+- **Rotation history:** keep a short list of rotations, because scanning the whole chain would then mean reading every block.
+- **Side branches:** drop those that fork below the reorganisation limit, since they can never become canonical on a running node.
+- **Signer cache:** give it a size limit.
 
 ## License
 
