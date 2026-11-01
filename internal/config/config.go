@@ -26,10 +26,10 @@ type File struct {
 	Advertise string `json:"advertise,omitempty"`
 	// PeerExchange false turns peer exchange off (default on).
 	PeerExchange *bool `json:"peerExchange,omitempty"`
-	// Features maps feature names to the height they apply from. This is a
-	// consensus rule: every node of a chain must have the same value. `eidchain
-	// pull` copies it from the server if this file has none.
-	Features map[string]uint64 `json:"features,omitempty"`
+	// Features maps feature names to the height they apply from, or to null if they
+	// never apply. This is a consensus rule: every node of a chain must have the same
+	// value. `eidchain pull` copies it from the server if this file has none.
+	Features chain.Schedule `json:"features,omitempty"`
 	// TrustCAs lists the CA certificates accepted for eID signatures in a NEW
 	// chain (`eidchain genesis`): PEM file paths (relative paths are relative
 	// to the data directory) or "builtin:hr" for the embedded AKDCA Root and

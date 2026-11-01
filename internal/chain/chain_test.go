@@ -462,7 +462,7 @@ func TestUntrustedCertificateIsRefusedBeforeSignatureWork(t *testing.T) {
 }
 
 func TestScheduleValidation(t *testing.T) {
-	for _, bad := range []chain.Schedule{{"block-timestamp": 4}, {chain.FeatureBlockTimestamps: 0}} {
+	for _, bad := range []chain.Schedule{{"block-timestamp": chain.At(4)}, {chain.FeatureBlockTimestamps: chain.At(0)}} {
 		if err := bad.Validate(); err == nil {
 			t.Errorf("%v was accepted", bad)
 		}
@@ -470,11 +470,11 @@ func TestScheduleValidation(t *testing.T) {
 			t.Errorf("Open: %v", err)
 		}
 	}
-	s := chain.Schedule{chain.FeatureBlockTimestamps: 4}
+	s := chain.Schedule{chain.FeatureBlockTimestamps: chain.At(4)}
 	if s.VersionAt(3) != 1 || s.VersionAt(4) != 2 || s.Active(chain.FeatureBlockTimestamps, 3) || !s.Active(chain.FeatureBlockTimestamps, 4) {
 		t.Error("the schedule is off by one")
 	}
-	if !chain.Schedule(nil).Equal(chain.Schedule{}) || s.Equal(chain.Schedule{chain.FeatureBlockTimestamps: 5}) {
+	if !chain.Schedule(nil).Equal(chain.Schedule{}) || s.Equal(chain.Schedule{chain.FeatureBlockTimestamps: chain.At(5)}) {
 		t.Error("Equal")
 	}
 }
@@ -484,7 +484,7 @@ func timestampEnv(t *testing.T) (*env, *testpki.TSA, chain.Options) {
 	t.Helper()
 	e := newEnv(t, 3)
 	fake := testpki.NewTSA(t)
-	opt := chain.Options{Features: chain.Schedule{chain.FeatureBlockTimestamps: 2}, TSARoots: fake.Roots()}
+	opt := chain.Options{Features: chain.Schedule{chain.FeatureBlockTimestamps: chain.At(2)}, TSARoots: fake.Roots()}
 	var err error
 	if e.store, err = chain.Open(e.dir, e.genesis.Hash(), opt); err != nil {
 		t.Fatal(err)
@@ -562,5 +562,33 @@ func TestBlockTimestampRules(t *testing.T) {
 	}
 	if len(plain.Skipped) == 0 {
 		t.Error("a block with a timestamp was accepted where none is allowed")
+	}
+}
+
+func TestNullHeightMeansNever(t *testing.T) {
+	never := chain.Schedule{chain.FeatureBlockTimestamps: nil}
+	if err := never.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if never.Active(chain.FeatureBlockTimestamps, 1<<62) || never.VersionAt(1<<62) != chain.Version {
+		t.Error("a null height applied")
+	}
+	if !never.Equal(nil) || !never.Equal(chain.Schedule{}) || never.Equal(chain.Schedule{chain.FeatureBlockTimestamps: chain.At(4)}) {
+		t.Error("null must behave exactly like leaving the feature out")
+	}
+	if err := (chain.Schedule{"block-timestamp": nil}).Validate(); err == nil {
+		t.Error("a misspelt feature was accepted because its height was null")
+	}
+	if got := fmt.Sprint(chain.Schedule{chain.FeatureBlockTimestamps: chain.At(4)}, never); !strings.Contains(got, "block-timestamps=4") || !strings.Contains(got, "block-timestamps=never") {
+		t.Errorf("rendered as %s", got)
+	}
+	// Blocks made without the feature stay valid, and none may carry a token.
+	e := newEnv(t, 3)
+	var err error
+	if e.store, err = chain.Open(e.dir, e.genesis.Hash(), chain.Options{Features: never}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.AddBlock(e.next(e.signers[0], []chain.PayloadEntry{e.payload("plain")}, nil)); err != nil {
+		t.Fatal(err)
 	}
 }

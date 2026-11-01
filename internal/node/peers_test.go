@@ -367,7 +367,7 @@ func nodeWithTimestamps(t *testing.T, urls ...string) (*Node, testpki.Leaf, *tes
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	features := chain.Schedule{chain.FeatureBlockTimestamps: 2}
+	features := chain.Schedule{chain.FeatureBlockTimestamps: chain.At(2)}
 	if _, err := chain.Init(dir, g, chain.Options{Features: features, TSARoots: fake.Roots()}); err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +477,7 @@ func TestPeersWithDifferentSchedulesDoNotSync(t *testing.T) {
 	srv := httptest.NewServer(a.Handler())
 	defer srv.Close()
 	dir := t.TempDir()
-	st, err := chain.Init(dir, a.store.P.Genesis, chain.Options{Features: chain.Schedule{chain.FeatureBlockTimestamps: 9}})
+	st, err := chain.Init(dir, a.store.P.Genesis, chain.Options{Features: chain.Schedule{chain.FeatureBlockTimestamps: chain.At(9)}})
 	if err != nil {
 		t.Fatal(err)
 	}

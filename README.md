@@ -168,7 +168,9 @@ A feature is a change to the block format or the consensus rules that starts at 
 | --- | --- | --- |
 | `block-timestamps` | 2 | A timestamp in every block, covered by the block hash |
 
-An unknown feature name, or height 0, stops the node with an error: a node must not ignore a rule it was told to enforce.
+A height of `null` means the feature never applies. That has the same effect as leaving it out, and nodes treat the two as the same schedule, but it records the decision. To turn a feature off, the height must be above every existing block that uses it, or `null` will make those blocks invalid.
+
+An unknown feature name, even with `null`, or height 0, stops the node with an error: a node must not ignore a rule it was told to enforce.
 
 **This setting is a consensus rule, and it is not in the genesis, so nothing protects it but agreement.** Every node of a chain needs the same value. Set a height above the current head, and change every node before the chain reaches it. Nodes compare schedules through `/api/v1/info`: they refuse to sync from a peer with a different one and name the difference, and will not learn such a peer. If a height is lowered below blocks that do not comply, those blocks are skipped on startup and `eidchain verify` fails. `eidchain pull` copies the server's schedule when `config.json` has none.
 
