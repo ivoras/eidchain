@@ -14,27 +14,27 @@ import (
 	"time"
 
 	"eidchain/internal/chain"
-	"eidchain/internal/tsa"
 )
 
 // Info is the node status served at /api/v1/info.
 type Info struct {
-	Version              int        `json:"version"`
-	GenesisHash          chain.Hash `json:"genesisHash"`
-	Message              string     `json:"message"`
-	Height               uint64     `json:"height"`
-	Head                 chain.Hash `json:"head"`
-	HeadTime             int64      `json:"headTime"`
-	Authorities          []string   `json:"authorities"`
-	RotationSeq          uint64     `json:"rotationSeq"`
-	RotationQuorum       int        `json:"rotationQuorum"`
-	Pending              int        `json:"pending"`
-	PendingRotations     int        `json:"pendingRotations"`
-	MaxPayloadBytes      int        `json:"maxPayloadBytes"`
-	BlockIntervalSeconds int        `json:"blockIntervalSeconds"`
-	NextBlockAt          int64      `json:"nextBlockAt"`
-	CanProduce           bool       `json:"canProduce"`
-	TrustAnchors         []string   `json:"trustAnchors"` // subjects of the eID CA certificates fixed in the genesis
+	Version              int            `json:"version"`
+	GenesisHash          chain.Hash     `json:"genesisHash"`
+	Message              string         `json:"message"`
+	Height               uint64         `json:"height"`
+	Head                 chain.Hash     `json:"head"`
+	HeadTime             int64          `json:"headTime"`
+	Authorities          []string       `json:"authorities"`
+	RotationSeq          uint64         `json:"rotationSeq"`
+	RotationQuorum       int            `json:"rotationQuorum"`
+	Pending              int            `json:"pending"`
+	PendingRotations     int            `json:"pendingRotations"`
+	MaxPayloadBytes      int            `json:"maxPayloadBytes"`
+	BlockIntervalSeconds int            `json:"blockIntervalSeconds"`
+	NextBlockAt          int64          `json:"nextBlockAt"`
+	CanProduce           bool           `json:"canProduce"`
+	TrustAnchors         []string       `json:"trustAnchors"` // subjects of the eID CA certificates fixed in the genesis
+	Features             chain.Schedule `json:"features,omitempty"`
 }
 
 // SubmitResult is the answer to a payload submission.
@@ -199,29 +199,6 @@ func (c *Client) PostRotation(ctx context.Context, rot chain.Rotation) (Rotation
 	return r, err
 }
 
-// BlockStamps carries a block's timestamp tokens.
-type BlockStamps struct {
-	Block  chain.Hash `json:"block"`
-	Tokens [][]byte   `json:"tokens"`
-}
-
-// StampPage is one answer from GET /timestamps; Next is 0 on the last page.
-type StampPage struct {
-	Stamps []BlockStamps `json:"stamps"`
-	Next   uint64        `json:"next"`
-}
-
-func (c *Client) Stamps(ctx context.Context, from uint64) (StampPage, error) {
-	var p StampPage
-	_, err := c.do(ctx, "GET", fmt.Sprintf("/api/v1/timestamps?from=%d", from), nil, &p)
-	return p, err
-}
-
-func (c *Client) PostStamps(ctx context.Context, s BlockStamps) error {
-	_, err := c.do(ctx, "POST", "/api/v1/timestamps", s, nil)
-	return err
-}
-
 // ---- synchronisation ----
 
 // SyncResult summarises a Sync.
@@ -234,38 +211,6 @@ type SyncResult struct {
 }
 
 const batch = 100
-
-// SyncStamps fetches the timestamps of blocks that have none here and returns how
-// many tokens were new. A token the book refuses is skipped: peers are not trusted.
-func SyncStamps(ctx context.Context, st *chain.Store, book *tsa.Book, c *Client) (int, error) {
-	from := uint64(1)
-	for {
-		hash, ok := st.HashAt(from)
-		if !ok {
-			return 0, nil // every block has one
-		}
-		if len(book.List(hash)) == 0 {
-			break
-		}
-		from++
-	}
-	added := 0
-	for from != 0 {
-		page, err := c.Stamps(ctx, from)
-		if err != nil {
-			return added, err
-		}
-		for _, s := range page.Stamps {
-			for _, t := range s.Tokens {
-				if ok, err := book.Add(s.Block, t); ok && err == nil {
-					added++
-				}
-			}
-		}
-		from = page.Next
-	}
-	return added, nil
-}
 
 // Sync downloads and verifies every block the node has that the store lacks.
 // Each block is fully validated by Store.AddBlock; nothing from the remote is
@@ -282,6 +227,9 @@ func Sync(ctx context.Context, st *chain.Store, c *Client, progress func(string)
 	res := SyncResult{Remote: info}
 	if info.GenesisHash != st.P.GenesisHash {
 		return res, fmt.Errorf("%s serves a different chain (genesis %s, ours %s)", c.Base, info.GenesisHash.Short(), st.P.GenesisHash.Short())
+	}
+	if !st.P.Features.Equal(info.Features) {
+		return res, fmt.Errorf("%s has a different feature schedule (%v, ours %v): nodes of a chain must agree on \"features\" in config.json", c.Base, info.Features, st.P.Features)
 	}
 	if st.Has(info.Head) {
 		res.UpToDate = true

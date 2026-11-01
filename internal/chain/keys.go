@@ -136,25 +136,36 @@ func LoadSigners(dir string) ([]Signer, error) {
 	return out, nil
 }
 
-// SignBlock fills in the header's signer, the payload commitments and the
-// authority signature.
+// SignBlock fills in the header's signer and the payload commitments, then signs.
+// A block that needs a timestamp goes through PrepareBlock first.
 func SignBlock(s Signer, b *Block) error {
-	root, err := PayloadsRoot(b.Payloads)
-	if err != nil {
+	if err := PrepareBlock(s, b); err != nil {
 		return err
 	}
-	b.Header.Version = Version
-	b.Header.PayloadsRoot = root
-	b.Header.PayloadCount = len(b.Payloads)
-	b.Header.RotationsRoot = RotationsRoot(b.Rotations)
-	b.Header.RotationCount = len(b.Rotations)
-	b.Header.Signer = s.ID
 	h := b.Hash()
 	sig, err := ecdsa.SignASN1(rand.Reader, s.Key, h[:])
 	if err != nil {
 		return err
 	}
 	b.Signature = base64.StdEncoding.EncodeToString(sig)
+	return nil
+}
+
+// PrepareBlock fills in everything that ContentHash covers. The header's version
+// stays as the caller set it, for the height; zero means the original format.
+func PrepareBlock(s Signer, b *Block) error {
+	root, err := PayloadsRoot(b.Payloads)
+	if err != nil {
+		return err
+	}
+	if b.Header.Version == 0 {
+		b.Header.Version = Version
+	}
+	b.Header.PayloadsRoot = root
+	b.Header.PayloadCount = len(b.Payloads)
+	b.Header.RotationsRoot = RotationsRoot(b.Rotations)
+	b.Header.RotationCount = len(b.Rotations)
+	b.Header.Signer = s.ID
 	return nil
 }
 

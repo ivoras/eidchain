@@ -251,6 +251,9 @@ func (n *Node) verifyPeer(ctx context.Context, base string) error {
 	if info.GenesisHash != n.store.P.GenesisHash {
 		return errors.New("it serves a different chain")
 	}
+	if !n.store.P.Features.Equal(info.Features) {
+		return errors.New("it has a different feature schedule")
+	}
 	return nil
 }
 

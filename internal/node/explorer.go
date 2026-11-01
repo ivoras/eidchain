@@ -17,14 +17,15 @@ import (
 // ---- JSON views for the explorer UI ----
 
 type blockSummary struct {
-	Hash      chain.Hash `json:"hash"`
-	Height    uint64     `json:"height"`
-	Time      int64      `json:"time"`
-	Signer    string     `json:"signer"`
-	Payloads  int        `json:"payloads"`
-	Rotations int        `json:"rotations"`
-	Size      int        `json:"size"`
-	Canonical bool       `json:"canonical"`
+	Hash        chain.Hash `json:"hash"`
+	Height      uint64     `json:"height"`
+	Time        int64      `json:"time"`        // see blockTime
+	Timestamped bool       `json:"timestamped"` // Time comes from a timestamp, not the signer's clock
+	Signer      string     `json:"signer"`
+	Payloads    int        `json:"payloads"`
+	Rotations   int        `json:"rotations"`
+	Size        int        `json:"size"`
+	Canonical   bool       `json:"canonical"`
 }
 
 type txSummary struct {
@@ -46,16 +47,14 @@ type blockView struct {
 	Confirmations uint64           `json:"confirmations"`
 	Transactions  []txSummary      `json:"transactions"`
 	Rotations_    []chain.Rotation `json:"rotationList"`
-	Timestamps    []stampView      `json:"timestamps"`
+	Timestamp     *stampView       `json:"timestamp,omitempty"`
 }
 
-// stampView is a verified timestamp. Token is the base64 RFC 3161 token, for
-// anyone who wants to check it themselves.
+// stampView describes a block's verified timestamp. The token is in the raw block.
 type stampView struct {
 	Authority string `json:"authority"`
 	Signer    string `json:"signer"`
 	Time      int64  `json:"time"`
-	Token     []byte `json:"token"`
 }
 
 type certView struct {
@@ -89,9 +88,19 @@ type txView struct {
 	OCSPError string          `json:"ocspError,omitempty"`
 }
 
-func summarize(b *chain.Block, canonical bool) blockSummary {
+// blockTime is the time to show for a block: the authority's, if it has a timestamp,
+// otherwise header.time, which is only the signer's clock.
+func (n *Node) blockTime(b *chain.Block) (int64, bool) {
+	if info, ok := n.store.P.BlockTimestamp(b); ok {
+		return info.Time.Unix(), true
+	}
+	return b.Header.Time, false
+}
+
+func (n *Node) summarize(b *chain.Block, canonical bool) blockSummary {
 	raw, _ := json.Marshal(b)
-	return blockSummary{Hash: b.Hash(), Height: b.Header.Height, Time: b.Header.Time, Signer: b.Header.Signer,
+	t, stamped := n.blockTime(b)
+	return blockSummary{Hash: b.Hash(), Height: b.Header.Height, Time: t, Timestamped: stamped, Signer: b.Header.Signer,
 		Payloads: len(b.Payloads), Rotations: len(b.Rotations), Size: len(raw), Canonical: canonical}
 }
 
@@ -197,7 +206,7 @@ func (n *Node) handleExplorerBlocks(w http.ResponseWriter, r *http.Request) {
 	blocks := n.store.Window(before, limit)
 	out := make([]blockSummary, 0, len(blocks))
 	for _, b := range blocks {
-		out = append(out, summarize(b, true))
+		out = append(out, n.summarize(b, true))
 	}
 	var older uint64 // pass as ?before= to get the next page; 0 = no more
 	if len(blocks) == limit && blocks[len(blocks)-1].Header.Height > 1 {
@@ -261,14 +270,13 @@ func (n *Node) handleExplorerBlock(w http.ResponseWriter, r *http.Request) {
 	}
 	h := b.Hash()
 	canon := n.store.IsCanonical(h)
-	v := blockView{blockSummary: summarize(b, canon), Header: b.Header, Signature: b.Signature,
+	v := blockView{blockSummary: n.summarize(b, canon), Header: b.Header, Signature: b.Signature,
 		Transactions: n.txSummaries(b), Rotations_: b.Rotations}
 	if v.Rotations_ == nil {
 		v.Rotations_ = []chain.Rotation{}
 	}
-	v.Timestamps = []stampView{}
-	for _, s := range n.stamps.List(h) {
-		v.Timestamps = append(v.Timestamps, stampView{s.Info.Authority, s.Info.Signer, s.Info.Time.Unix(), s.Token})
+	if info, ok := n.store.P.BlockTimestamp(b); ok {
+		v.Timestamp = &stampView{info.Authority, info.Signer, info.Time.Unix()}
 	}
 	prev := b.Header.Prev
 	if b.Header.Height == 1 {
@@ -294,7 +302,8 @@ func (n *Node) handleExplorerTx(w http.ResponseWriter, r *http.Request) {
 	if b, idx, ok := n.store.FindPayload(id); ok {
 		v := n.txFor(b.Payloads[idx], time.Unix(b.Header.Time, 0))
 		bh := b.Hash()
-		v.Status, v.Block, v.Height, v.Index, v.Time = "confirmed", &bh, b.Header.Height, idx, b.Header.Time
+		t, _ := n.blockTime(b)
+		v.Status, v.Block, v.Height, v.Index, v.Time = "confirmed", &bh, b.Header.Height, idx, t
 		writeJSON(w, 200, v)
 		return
 	}

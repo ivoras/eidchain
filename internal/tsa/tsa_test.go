@@ -2,7 +2,6 @@ package tsa_test
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"eidchain/internal/chain"
 	"eidchain/internal/testpki"
 	"eidchain/internal/tsa"
 )
@@ -88,41 +86,6 @@ func TestRequestRefusesARepliedOldToken(t *testing.T) {
 	_, _, err := tsa.Request(context.Background(), replay.Client(), replay.URL, hash, fake.Roots())
 	if err == nil || !strings.Contains(err.Error(), "nonce") {
 		t.Fatalf("got %v", err)
-	}
-}
-
-func TestBook(t *testing.T) {
-	fake := testpki.NewTSA(t)
-	dir := t.TempDir()
-	book, skipped := tsa.OpenBook(dir, fake.Roots())
-	if len(skipped) != 0 {
-		t.Fatal(skipped)
-	}
-	h := chain.Hash{9}
-	later := fake.Token(t, h, time.Now())
-	earlier := fake.Token(t, h, time.Now().Add(-time.Hour))
-	if ok, err := book.Add(h, later); !ok || err != nil {
-		t.Fatal(ok, err)
-	}
-	if ok, err := book.Add(h, later); ok || err != nil {
-		t.Fatal("the same token was added twice", ok, err)
-	}
-	if ok, err := book.Add(h, earlier); !ok || err != nil {
-		t.Fatal("an earlier token did not replace the later one", ok, err)
-	}
-	if ok, _ := book.Add(chain.Hash{8}, later); ok {
-		t.Fatal("a token was accepted for another block")
-	}
-	re, skipped := tsa.OpenBook(dir, fake.Roots())
-	if len(skipped) != 0 || len(re.List(h)) != 1 || !re.Has(h, fake.RootName()) {
-		t.Fatalf("after reopening: %v %v", skipped, re.List(h))
-	}
-	raw, _ := json.Marshal([][]byte{[]byte("not a token")})
-	if err := os.WriteFile(filepath.Join(dir, "timestamps", h.String()+".json"), raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, skipped := tsa.OpenBook(dir, fake.Roots()); len(skipped) != 1 {
-		t.Fatalf("a damaged file was not reported: %v", skipped)
 	}
 }
 

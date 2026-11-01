@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -55,7 +56,7 @@ func (w *peerWorld) start(n int, peers map[int][]int, mutate func(i int, o *Opti
 	}
 	for i := range nodes {
 		dir := w.t.TempDir()
-		if _, err := chain.Init(dir, w.g); err != nil {
+		if _, err := chain.Init(dir, w.g, chain.Options{}); err != nil {
 			w.t.Fatal(err)
 		}
 		o := Options{Data: dir, Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip",
@@ -262,7 +263,7 @@ func TestShareablePeers(t *testing.T) {
 	w := newPeerWorld(t, "share")
 	mk := func(allowPrivate bool) *Node {
 		dir := t.TempDir()
-		if _, err := chain.Init(dir, w.g); err != nil {
+		if _, err := chain.Init(dir, w.g, chain.Options{}); err != nil {
 			t.Fatal(err)
 		}
 		n, err := New(Options{Data: dir, Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip",
@@ -354,82 +355,136 @@ func TestSlowPeerDoesNotDelayOthers(t *testing.T) {
 	}
 }
 
-func TestBlocksGetTimestampedAndTokensSpread(t *testing.T) {
-	w := newPeerWorld(t, "stamps")
+// nodeWithTimestamps is a one-authority node that requires timestamps from height 2.
+func nodeWithTimestamps(t *testing.T, urls ...string) (*Node, testpki.Leaf, *testpki.TSA) {
+	t.Helper()
+	pki := testpki.New(t)
 	fake := testpki.NewTSA(t)
-	srv := httptest.NewServer(fake)
-	defer srv.Close()
-	nodes, srvs := w.start(3, map[int][]int{0: {1}}, func(i int, o *Options) {
-		o.TSAs = []tsa.Authority{{Root: fake.RootName(), URL: srv.URL}}
-		o.TSARoots = fake.Roots()
-		o.TimestampPoll = 10 * time.Millisecond
-	})
-	a, b, late := nodes[0], nodes[1], nodes[2]
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	p := record(w.g.Hash(), "stamp me")
-	blockOn(t, w, a, chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, w.card, []byte(p)))})
-	hash, _ := a.store.Head()
-	for _, n := range []*Node{b, late} {
-		if _, err := n.store.AddBlock(mustBlock(t, a, hash)); err != nil {
-			t.Fatal(err)
-		}
+	k, _ := chain.GenerateKey()
+	pub, _ := chain.EncodePublicKey(&k.PublicKey)
+	g, err := chain.NewGenesis("features", []chain.Authority{{PublicKey: pub}}, []string{pki.RootPEM, pki.InterPEM}, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
 	}
-	go a.stampLoop(ctx, a.opt.TSAs[0])
-	waitFor(t, "the token to reach the peer", func() bool { return len(b.stamps.List(hash)) == 1 })
-
-	// A node that missed the gossip fetches it.
-	if n, err := remote.SyncStamps(ctx, late.store, late.stamps, remote.New(srvs[1].URL)); n != 1 || err != nil {
-		t.Fatalf("sync: %d, %v", n, err)
+	dir := t.TempDir()
+	features := chain.Schedule{chain.FeatureBlockTimestamps: 2}
+	if _, err := chain.Init(dir, g, chain.Options{Features: features, TSARoots: fake.Roots()}); err != nil {
+		t.Fatal(err)
 	}
-	if rec := get(a.Handler(), "/api/v1/explorer/block/1"); !strings.Contains(rec.Body.String(), fake.RootName()) {
-		t.Errorf("the explorer does not show the timestamp: %s", rec.Body)
+	if err := chain.SavePrivateKey(filepath.Join(dir, "keys", "a.key"), k); err != nil {
+		t.Fatal(err)
 	}
-
-	// A token for another block is refused, and so is one for an unknown block.
-	wrong := fake.Token(t, chain.Hash{1}, time.Now())
-	if rec := post(a.Handler(), "/api/v1/timestamps", jsonBody(t, remote.BlockStamps{Block: hash, Tokens: [][]byte{wrong}})); rec.Code != 422 {
-		t.Errorf("wrong token: HTTP %d", rec.Code)
+	var tsas []tsa.Authority
+	for _, u := range urls {
+		tsas = append(tsas, tsa.Authority{Name: u, URL: u})
 	}
-	if rec := post(a.Handler(), "/api/v1/timestamps", jsonBody(t, remote.BlockStamps{Block: chain.Hash{1}, Tokens: [][]byte{wrong}})); rec.Code != 404 {
-		t.Errorf("unknown block: HTTP %d", rec.Code)
+	n, err := New(Options{Data: dir, Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip",
+		Features: features, TSAs: tsas, TSARoots: fake.Roots()})
+	if err != nil {
+		t.Fatal(err)
 	}
+	return n, pki.Leaf(t, "PERA PERIC", x509.KeyUsageContentCommitment, false), fake
 }
 
-// A timestamp service being down must never get in the way of the chain.
-func TestAuthorityOutageDoesNotStopTheChain(t *testing.T) {
-	w := newPeerWorld(t, "outage")
-	fake := testpki.NewTSA(t)
-	var up atomic.Bool
-	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		if !up.Load() {
+func TestProducedBlocksCarryATimestamp(t *testing.T) {
+	var down atomic.Bool
+	var fake *testpki.TSA
+	var calls1, calls2 atomic.Int32
+	first := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		calls1.Add(1)
+		if down.Load() {
 			http.Error(rw, "down", 503)
 			return
 		}
 		fake.ServeHTTP(rw, r)
 	}))
+	defer first.Close()
+	var secondDown atomic.Bool
+	second := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		calls2.Add(1)
+		if secondDown.Load() {
+			http.Error(rw, "down", 503)
+			return
+		}
+		fake.ServeHTTP(rw, r)
+	}))
+	defer second.Close()
+	var card testpki.Leaf
+	var n *Node
+	n, card, fake = nodeWithTimestamps(t, first.URL, second.URL)
+	cut := func(text string) *chain.Block {
+		p := record(n.store.P.GenesisHash, text)
+		e := chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, card, []byte(p)))}
+		if _, err := n.SubmitPayload(context.Background(), e, "test"); err != nil {
+			t.Fatal(err)
+		}
+		n.produce()
+		h, _ := n.store.Head()
+		b, _ := n.store.Block(h)
+		return b
+	}
+	// Before the feature's height: the old format, and no authority is contacted.
+	if b := cut("one"); b.Header.Height != 1 || b.Header.Version != 1 || b.Timestamp != "" || calls1.Load() != 0 {
+		t.Fatalf("height 1: %+v, %d calls", b.Header, calls1.Load())
+	}
+	// From it: one token, from the first authority.
+	b := cut("two")
+	if b.Header.Height != 2 || b.Header.Version != 2 || b.Timestamp == "" || b.Header.TimestampHash == nil {
+		t.Fatalf("height 2: %+v", b.Header)
+	}
+	if calls1.Load() != 1 || calls2.Load() != 0 {
+		t.Fatalf("calls: %d, %d", calls1.Load(), calls2.Load())
+	}
+	if rec := get(n.Handler(), "/api/v1/explorer/block/2"); !strings.Contains(rec.Body.String(), fake.RootName()) {
+		t.Errorf("the explorer does not show the timestamp: %s", rec.Body)
+	}
+	// The second authority is only a fallback.
+	down.Store(true)
+	if b := cut("three"); b.Header.Height != 3 || calls2.Load() != 1 {
+		t.Fatalf("fallback: height %d, %d calls", b.Header.Height, calls2.Load())
+	}
+	// With neither, no block is made, nothing is lost, and it recovers.
+	secondDown.Store(true)
+	if b := cut("four"); b.Header.Height != 3 {
+		t.Fatalf("a block was made without a timestamp: height %d", b.Header.Height)
+	}
+	if n.pool.Len() != 1 {
+		t.Fatalf("%d message(s) pending", n.pool.Len())
+	}
+	down.Store(false)
+	n.produce()
+	if _, h := n.store.Head(); h != 4 || n.pool.Len() != 0 {
+		t.Fatalf("after the outage: height %d, %d pending", h, n.pool.Len())
+	}
+}
+
+func TestExplorerPrefersTheTimestampOverHeaderTime(t *testing.T) {
+	n, _, fake := nodeWithTimestamps(t)
+	plain := &chain.Block{Header: chain.Header{Height: 1, Time: 1000}}
+	if got, stamped := n.blockTime(plain); got != 1000 || stamped {
+		t.Errorf("no timestamp: %d, %v", got, stamped)
+	}
+	at := time.Now().Add(-time.Minute).Truncate(time.Second)
+	b := &chain.Block{Header: chain.Header{Height: 2, Time: time.Now().Unix()}}
+	b.SetTimestamp(fake.Token(t, b.ContentHash(), at))
+	if got, stamped := n.blockTime(b); got != at.Unix() || !stamped {
+		t.Errorf("with a timestamp: %d (want %d), %v", got, at.Unix(), stamped)
+	}
+}
+
+func TestPeersWithDifferentSchedulesDoNotSync(t *testing.T) {
+	a, _, _ := nodeWithTimestamps(t)
+	srv := httptest.NewServer(a.Handler())
 	defer srv.Close()
-	nodes, _ := w.start(1, nil, func(i int, o *Options) {
-		o.TSAs = []tsa.Authority{{Root: fake.RootName(), URL: srv.URL}}
-		o.TSARoots = fake.Roots()
-		o.TimestampPoll = 5 * time.Millisecond
-	})
-	n := nodes[0]
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go n.stampLoop(ctx, n.opt.TSAs[0])
-	p := record(w.g.Hash(), "during the outage")
-	blockOn(t, w, n, chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, w.card, []byte(p)))})
-	hash, height := n.store.Head()
-	if height != 1 {
-		t.Fatalf("the block was not made: height %d", height)
+	dir := t.TempDir()
+	st, err := chain.Init(dir, a.store.P.Genesis, chain.Options{Features: chain.Schedule{chain.FeatureBlockTimestamps: 9}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	time.Sleep(30 * time.Millisecond)
-	if len(n.stamps.List(hash)) != 0 {
-		t.Fatal("a token appeared during the outage")
+	_, err = remote.Sync(context.Background(), st, remote.New(srv.URL), nil)
+	if err == nil || !strings.Contains(err.Error(), "feature schedule") {
+		t.Fatalf("got %v", err)
 	}
-	up.Store(true)
-	waitFor(t, "the token after the outage", func() bool { return len(n.stamps.List(hash)) == 1 })
 }
 
 // blockOn makes a block on top of n's head, signed by the world's key.

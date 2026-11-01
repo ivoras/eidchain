@@ -223,6 +223,11 @@ func (a *TSA) Roots() *x509.CertPool {
 
 func (a *TSA) RootName() string { return a.root.Subject.CommonName }
 
+// RootPEM returns the root certificate.
+func (a *TSA) RootPEM() []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: a.root.Raw})
+}
+
 type tsaReq struct {
 	Version int
 	Imprint struct {

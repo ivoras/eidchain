@@ -1,9 +1,6 @@
-// Package tsa gets and verifies RFC 3161 timestamps on block hashes. A timestamp
-// is outside evidence that a block existed at a given time: the time comes from
-// the authority, not from the node, so it cannot be backdated by the chain's own
-// keys. Tokens sign the block hash, so they can only be made after it exists and
-// are kept beside the block, not in it. Block validity never depends on them, and
-// an outage at an authority cannot stop the chain.
+// Package tsa gets and verifies RFC 3161 timestamps. A timestamp is outside evidence
+// that some data existed at a given time: the time comes from the authority, so it
+// cannot be backdated with the chain's own keys.
 package tsa
 
 import (
@@ -33,17 +30,17 @@ var rootFiles embed.FS
 
 // Authority is a timestamp service.
 type Authority struct {
-	Root string        // common name of the root its tokens chain to
-	URL  string        // RFC 3161 HTTP endpoint
-	Gap  time.Duration // wait between requests
+	Name string
+	URL  string // RFC 3161 HTTP endpoint
 }
 
-// Default lists the authorities used by a node that signs blocks. Neither issues
-// qualified eIDAS timestamps. Both are free: Sectigo asks scripts to wait at least
-// 15 seconds between requests.
+// Default lists the authorities a producer asks, in order: a block needs one token,
+// so the later ones are only tried if the earlier ones fail. Neither issues
+// qualified eIDAS timestamps. Both are free, and Sectigo asks scripts to wait at
+// least 15 seconds between requests, which block intervals of a minute or more do.
 var Default = []Authority{
-	{Root: "Sectigo Public Time Stamping Root R46", URL: "http://timestamp.sectigo.com", Gap: 15 * time.Second},
-	{Root: "www.freetsa.org", URL: "https://freetsa.org/tsr", Gap: 15 * time.Second},
+	{Name: "Sectigo", URL: "http://timestamp.sectigo.com"},
+	{Name: "FreeTSA", URL: "https://freetsa.org/tsr"},
 }
 
 // Roots returns the embedded roots of the default authorities.

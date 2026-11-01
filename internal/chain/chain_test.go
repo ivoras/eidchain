@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"eidchain/internal/chain"
+	"eidchain/internal/testpki"
 )
 
 func TestVerifyDetachedGoBuilt(t *testing.T) {
@@ -250,7 +251,7 @@ func TestKeyRotation(t *testing.T) {
 		t.Fatal("replayed rotation accepted")
 	}
 	// The retired key's earlier signatures stay valid: reopening replays the whole chain.
-	re, err := chain.Open(e.dir, e.genesis.Hash())
+	re, err := chain.Open(e.dir, e.genesis.Hash(), chain.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +325,7 @@ func TestRetiredKeysCannotRewriteTheChain(t *testing.T) {
 	if head, _ := e.store.Head(); head != honest {
 		t.Fatal("the head moved to the forged branch")
 	}
-	re, err := chain.Open(e.dir, e.genesis.Hash())
+	re, err := chain.Open(e.dir, e.genesis.Hash(), chain.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +384,7 @@ func TestOpenReportsDamagedBlocks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(e.dir, "blocks", b1.Hash().String()+".json"), []byte("{broken"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	re, err := chain.Open(e.dir, e.genesis.Hash())
+	re, err := chain.Open(e.dir, e.genesis.Hash(), chain.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,5 +458,109 @@ func TestUntrustedCertificateIsRefusedBeforeSignatureWork(t *testing.T) {
 	entry := chain.PayloadEntry{Payload: text, Signature: base64.StdEncoding.EncodeToString(sig)}
 	if _, err := p.VerifyPayload(entry, time.Now()); err == nil || !strings.Contains(err.Error(), "not trusted") {
 		t.Fatalf("got %v, want the trust failure first", err)
+	}
+}
+
+func TestScheduleValidation(t *testing.T) {
+	for _, bad := range []chain.Schedule{{"block-timestamp": 4}, {chain.FeatureBlockTimestamps: 0}} {
+		if err := bad.Validate(); err == nil {
+			t.Errorf("%v was accepted", bad)
+		}
+		if _, err := chain.Open(t.TempDir(), chain.Hash{}, chain.Options{Features: bad}); err == nil || strings.Contains(err.Error(), "no usable chain") {
+			t.Errorf("Open: %v", err)
+		}
+	}
+	s := chain.Schedule{chain.FeatureBlockTimestamps: 4}
+	if s.VersionAt(3) != 1 || s.VersionAt(4) != 2 || s.Active(chain.FeatureBlockTimestamps, 3) || !s.Active(chain.FeatureBlockTimestamps, 4) {
+		t.Error("the schedule is off by one")
+	}
+	if !chain.Schedule(nil).Equal(chain.Schedule{}) || s.Equal(chain.Schedule{chain.FeatureBlockTimestamps: 5}) {
+		t.Error("Equal")
+	}
+}
+
+// timestampEnv is a chain that requires timestamps from height 2.
+func timestampEnv(t *testing.T) (*env, *testpki.TSA, chain.Options) {
+	t.Helper()
+	e := newEnv(t, 3)
+	fake := testpki.NewTSA(t)
+	opt := chain.Options{Features: chain.Schedule{chain.FeatureBlockTimestamps: 2}, TSARoots: fake.Roots()}
+	var err error
+	if e.store, err = chain.Open(e.dir, e.genesis.Hash(), opt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.AddBlock(e.next(e.signers[0], []chain.PayloadEntry{e.payload("before")}, nil)); err != nil {
+		t.Fatal(err)
+	}
+	return e, fake, opt
+}
+
+// stamped builds a block for height 2; mutate changes it after the token is made.
+func stamped(t *testing.T, e *env, fake *testpki.TSA, text string, at time.Time, mutate func(*chain.Block)) *chain.Block {
+	t.Helper()
+	head, h := e.store.Head()
+	b := &chain.Block{Header: chain.Header{Version: 2, Height: h + 1, Prev: head, Time: time.Now().Unix()}, Payloads: []chain.PayloadEntry{e.payload(text)}}
+	s := e.signers[1]
+	if err := chain.PrepareBlock(s, b); err != nil {
+		t.Fatal(err)
+	}
+	b.SetTimestamp(fake.Token(t, b.ContentHash(), at))
+	if mutate != nil {
+		mutate(b)
+	}
+	if err := chain.SignBlock(s, b); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestBlockTimestampRules(t *testing.T) {
+	e, fake, opt := timestampEnv(t)
+	now := time.Now()
+	other := testpki.NewTSA(t)
+	cases := map[string]func(*chain.Block){
+		"missing":         func(b *chain.Block) { b.Timestamp, b.Header.TimestampHash = "", nil },
+		"no commit":       func(b *chain.Block) { b.Header.TimestampHash = nil },
+		"unhashed":        func(b *chain.Block) { h := chain.Hash{1}; b.Header.TimestampHash = &h },
+		"old format":      func(b *chain.Block) { b.Header.Version = 1 },
+		"untrusted":       func(b *chain.Block) { b.SetTimestamp(other.Token(t, b.ContentHash(), now)) },
+		"other hash":      func(b *chain.Block) { b.SetTimestamp(fake.Token(t, chain.Hash{7}, now)) },
+		"content changed": func(b *chain.Block) { b.Header.Time++ },
+	}
+	for name, mutate := range cases {
+		if _, err := e.store.AddBlock(stamped(t, e, fake, name, now, mutate)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := e.store.AddBlock(stamped(t, e, fake, "stale", now.Add(-time.Hour), nil)); err == nil {
+		t.Error("a token an hour older than the block was accepted")
+	}
+	good := stamped(t, e, fake, "good", now, nil)
+	if _, err := e.store.AddBlock(good); err != nil {
+		t.Fatal(err)
+	}
+	// The token is covered by the block hash, and survives a restart and verify.
+	swapped := *good
+	swapped.SetTimestamp(fake.Token(t, good.ContentHash(), now.Add(-time.Minute)))
+	if swapped.Hash() == good.Hash() {
+		t.Error("changing the token did not change the block hash")
+	}
+	if swapped.ContentHash() != good.ContentHash() {
+		t.Error("the content hash depends on the token")
+	}
+	re, err := chain.Open(e.dir, e.genesis.Hash(), opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, err := re.Verify(); err != nil || h != 2 || len(re.Skipped) != 0 {
+		t.Fatalf("verify: %d, %v, %v", h, err, re.Skipped)
+	}
+	// Without the schedule the same blocks are not valid: nodes must agree on it.
+	plain, err := chain.Open(e.dir, e.genesis.Hash(), chain.Options{TSARoots: fake.Roots()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plain.Skipped) == 0 {
+		t.Error("a block with a timestamp was accepted where none is allowed")
 	}
 }

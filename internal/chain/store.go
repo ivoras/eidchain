@@ -2,6 +2,7 @@ package chain
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"eidchain/internal/tsa"
 )
 
 // Errors returned by AddBlock that callers react to.
@@ -74,9 +77,18 @@ type Store struct {
 // GenesisPath returns where the genesis file lives in a data directory.
 func GenesisPath(dir string) string { return filepath.Join(dir, "genesis.json") }
 
+// Options are a chain's settings that do not come from its genesis.
+type Options struct {
+	Features Schedule       // which features apply from which height
+	TSARoots *x509.CertPool // default tsa.Roots(); tests use their own
+}
+
 // Open loads the chain in dir. If expected is non-zero the stored genesis must
 // hash to it. Invalid or orphaned block files are skipped with a warning.
-func Open(dir string, expected Hash) (*Store, error) {
+func Open(dir string, expected Hash, opt Options) (*Store, error) {
+	if err := opt.Features.Validate(); err != nil {
+		return nil, err
+	}
 	g, err := LoadGenesis(GenesisPath(dir))
 	if err != nil {
 		return nil, fmt.Errorf("no usable chain in %s: %w (create one with `eidchain genesis` or fetch one with `eidchain pull`)", dir, err)
@@ -87,6 +99,10 @@ func Open(dir string, expected Hash) (*Store, error) {
 	}
 	if !expected.IsZero() && expected != p.GenesisHash {
 		return nil, fmt.Errorf("genesis in %s has hash %s, but %s is configured", dir, p.GenesisHash, expected)
+	}
+	p.Features, p.TSARoots = opt.Features, opt.TSARoots
+	if p.TSARoots == nil {
+		p.TSARoots = tsa.Roots()
 	}
 	s := &Store{Dir: dir, P: p, blocks: map[Hash]*entry{}, ids: map[Hash]Hash{}, now: time.Now}
 	s.blocks[p.GenesisHash] = &entry{hash: p.GenesisHash, height: 0, time: g.Created, state: p.Initial}
@@ -124,14 +140,14 @@ func Open(dir string, expected Hash) (*Store, error) {
 
 // Init writes a new genesis into dir and opens it. It refuses to replace a
 // different existing genesis.
-func Init(dir string, g *Genesis) (*Store, error) {
+func Init(dir string, g *Genesis, opt Options) (*Store, error) {
 	if existing, err := LoadGenesis(GenesisPath(dir)); err == nil && existing.Hash() != g.Hash() {
 		return nil, fmt.Errorf("%s already holds a different chain (%s)", dir, existing.Hash())
 	}
 	if err := SaveGenesis(GenesisPath(dir), g); err != nil {
 		return nil, err
 	}
-	return Open(dir, g.Hash())
+	return Open(dir, g.Hash(), opt)
 }
 
 func (s *Store) blockPath(h Hash) string { return filepath.Join(s.Dir, "blocks", h.String()+".json") }

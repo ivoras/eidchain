@@ -12,7 +12,6 @@ import (
 	"eidchain/internal/chain"
 	"eidchain/internal/config"
 	"eidchain/internal/remote"
-	"eidchain/internal/tsa"
 )
 
 // cmdPull behaves like `docker pull`: the first pull needs the chain's identity
@@ -42,6 +41,19 @@ func cmdPull(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	c := remote.New(server)
+	// The feature schedule is a consensus rule that is not in the genesis. Follow the
+	// server if nothing is configured: a wrong schedule only makes blocks fail
+	// validation, and the signatures on them still have to be real.
+	if cfg.Features == nil {
+		info, err := c.Info(ctx)
+		if err != nil {
+			return err
+		}
+		if len(info.Features) > 0 {
+			fmt.Printf("Using the server's features: %v\n", info.Features)
+			cfg.Features = info.Features
+		}
+	}
 
 	if _, err := os.Stat(chain.GenesisPath(*data)); errors.Is(err, os.ErrNotExist) {
 		if want.IsZero() && !*tofu {
@@ -62,12 +74,12 @@ func cmdPull(args []string) error {
 		if want.IsZero() {
 			fmt.Printf("WARNING: trusting genesis %s on first use\n", g.Hash())
 		}
-		if _, err := chain.Init(*data, g); err != nil {
+		if _, err := chain.Init(*data, g, chain.Options{Features: cfg.Features}); err != nil {
 			return err
 		}
 		want = g.Hash()
 	}
-	st, err := chain.Open(*data, want)
+	st, err := chain.Open(*data, want, chain.Options{Features: cfg.Features})
 	if err != nil {
 		return err
 	}
@@ -80,12 +92,6 @@ func cmdPull(args []string) error {
 		return err
 	}
 	head, height := st.Head()
-	book, _ := tsa.OpenBook(*data, tsa.Roots())
-	if added, err := remote.SyncStamps(ctx, st, book, c); err != nil {
-		fmt.Printf("  Timestamps not fetched: %v\n", err)
-	} else if added > 0 {
-		fmt.Printf("  Fetched %d timestamp(s)\n", added)
-	}
 	fmt.Printf("Digest: sha256:%s\n", head)
 	switch {
 	case res.UpToDate:

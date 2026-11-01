@@ -76,8 +76,6 @@ func (n *Node) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/check-cert", n.handleCheckCert)
 	mux.HandleFunc("GET /api/v1/peers", n.handlePeers)
 	mux.HandleFunc("POST /api/v1/peers", n.handleAnnounce)
-	mux.HandleFunc("GET /api/v1/timestamps", n.handleStamps)
-	mux.HandleFunc("POST /api/v1/timestamps", n.handlePostStamps)
 	mux.HandleFunc("GET /api/v1/authorities", n.handleAuthorities)
 	mux.HandleFunc("GET /api/v1/rotations", n.handleRotations)
 	mux.HandleFunc("POST /api/v1/rotations", n.handlePostRotation)
@@ -151,6 +149,7 @@ func (n *Node) info() remote.Info {
 		BlockIntervalSeconds: int(n.opt.BlockInterval / time.Second),
 		NextBlockAt:          nextBoundary(time.Now(), n.opt.BlockInterval).Unix(),
 		CanProduce:           can,
+		Features:             n.store.P.Features,
 		TrustAnchors:         anchors,
 	}
 }
@@ -322,11 +321,12 @@ func (n *Node) pendingMessages() []Message {
 
 func (n *Node) blockMessages(b *chain.Block) []Message {
 	h := b.Hash()
+	t, _ := n.blockTime(b)
 	out := make([]Message, 0, len(b.Payloads))
 	for _, e := range b.Payloads {
 		m := n.metaFor(e, time.Unix(b.Header.Time, 0))
 		out = append(out, Message{Status: "confirmed", ID: e.ID(), Payload: e.Payload, Subject: m.Subject,
-			Serial: m.Serial, Height: b.Header.Height, Block: &h, Time: b.Header.Time, OCSP: e.OCSP != ""})
+			Serial: m.Serial, Height: b.Header.Height, Block: &h, Time: t, OCSP: e.OCSP != ""})
 	}
 	return out
 }

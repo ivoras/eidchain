@@ -81,7 +81,7 @@ func TestTwoNodesGossipSyncAndRotation(t *testing.T) {
 	genesisHash = g.Hash()
 	mkDir := func(signers ...*chain.Signer) string {
 		dir := t.TempDir()
-		if _, err := chain.Init(dir, g); err != nil {
+		if _, err := chain.Init(dir, g, chain.Options{}); err != nil {
 			t.Fatal(err)
 		}
 		for i, s := range signers {
@@ -151,7 +151,7 @@ func TestTwoNodesGossipSyncAndRotation(t *testing.T) {
 	waitFor(t, "block 2 on A", func() bool { _, h := na.store.Head(); return h == 2 })
 
 	// 4. A third node with an empty chain catches up with a verified pull.
-	stC, err := chain.Open(dirC, g.Hash())
+	stC, err := chain.Open(dirC, g.Hash(), chain.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestRejectedPayloadIsExplainedInTheLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	if _, err := chain.Init(dir, g); err != nil {
+	if _, err := chain.Init(dir, g, chain.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	n, err := New(Options{Data: dir, Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip"})
@@ -278,7 +278,7 @@ func newSoloNode(t *testing.T) (*Node, testpki.Leaf, *testpki.PKI) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	if _, err := chain.Init(dir, g); err != nil {
+	if _, err := chain.Init(dir, g, chain.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := chain.SavePrivateKey(filepath.Join(dir, "keys", "a.key"), k); err != nil {
@@ -464,7 +464,7 @@ func TestPullResolvesAForkAndNeverGoesBackwards(t *testing.T) {
 		t.Fatal(err)
 	}
 	mkStore := func() *chain.Store {
-		st, err := chain.Init(t.TempDir(), g)
+		st, err := chain.Init(t.TempDir(), g, chain.Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -491,7 +491,7 @@ func TestPullResolvesAForkAndNeverGoesBackwards(t *testing.T) {
 
 	// The remote node (Y) and the local store (X) share block 1, then diverge.
 	dirY := t.TempDir()
-	if _, err := chain.Init(dirY, g); err != nil {
+	if _, err := chain.Init(dirY, g, chain.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	ny, err := New(Options{Data: dirY, Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip"})
@@ -543,8 +543,8 @@ func TestPullResolvesAForkAndNeverGoesBackwards(t *testing.T) {
 		// A stale node: the same chain, truncated to block 1.
 		nb, _ := New(Options{Data: func() string {
 			d := t.TempDir()
-			chain.Init(d, g)
-			st, _ := chain.Open(d, g.Hash())
+			chain.Init(d, g, chain.Options{})
+			st, _ := chain.Open(d, g.Hash(), chain.Options{})
 			st.AddBlock(common)
 			return d
 		}(), Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip"})

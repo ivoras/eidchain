@@ -22,6 +22,7 @@ const (
 
 	genesisDomain  = "eidchain/genesis/v1\n"
 	blockDomain    = "eidchain/block/v1\n"
+	contentDomain  = "eidchain/block-content/v1\n"
 	rotationDomain = "eidchain/rotation/v1\n"
 	payloadDomain  = "eidchain/payload/v1\n"
 )
@@ -102,6 +103,8 @@ type Header struct {
 	RotationsRoot Hash   `json:"rotationsRoot"`
 	RotationCount int    `json:"rotationCount"`
 	Signer        string `json:"signer"` // authority key ID (hex SHA-256 of the SPKI)
+	// TimestampHash is the SHA-256 of Block.Timestamp (feature block-timestamps).
+	TimestampHash *Hash `json:"timestampHash,omitempty"`
 }
 
 // KeyChange replaces one authority key by another. It is a control message:
@@ -165,7 +168,8 @@ type Block struct {
 	Header    Header         `json:"header"`
 	Payloads  []PayloadEntry `json:"payloads"`
 	Rotations []Rotation     `json:"rotations,omitempty"`
-	Signature string         `json:"signature"` // base64 ASN.1 ECDSA signature over the block hash
+	Timestamp string         `json:"timestamp,omitempty"` // base64 RFC 3161 token over ContentHash (feature block-timestamps)
+	Signature string         `json:"signature"`           // base64 ASN.1 ECDSA signature over the block hash
 }
 
 // canonical encodes v as compact JSON, struct fields in declaration order and
@@ -192,6 +196,22 @@ func HashHeader(h Header) Hash {
 
 // Hash returns the block's hash.
 func (b *Block) Hash() Hash { return HashHeader(b.Header) }
+
+// ContentHash is what a block's timestamp token signs: the whole header except the
+// reference to that token. A token cannot cover the hash that depends on it, so a
+// block has two hashes, and the block hash commits to the token through TimestampHash.
+func (b *Block) ContentHash() Hash {
+	h := b.Header
+	h.TimestampHash = nil
+	return sha256.Sum256(append([]byte(contentDomain), canonical(h)...))
+}
+
+// SetTimestamp stores a token in the block and commits the header to it.
+func (b *Block) SetTimestamp(token []byte) {
+	b.Timestamp = base64.StdEncoding.EncodeToString(token)
+	h := Hash(sha256.Sum256(token))
+	b.Header.TimestampHash = &h
+}
 
 func putChunk(buf *bytes.Buffer, b []byte) {
 	var n [4]byte

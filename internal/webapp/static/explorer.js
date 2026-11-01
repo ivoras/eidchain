@@ -85,6 +85,7 @@ async function viewBlocks(before) {
   show(
     heading("explorer", "Blocks.", `“${info.message}”`),
     h("div", { class: "stats" }, stat("height", info.height), stat("pending", info.pending), stat("authorities", info.authorities.length), stat("rotations", info.rotationSeq)),
+    h("div", { class: "pager" }, link("#/pending", `Pending messages (${info.pending})`, { class: "btn" })),
     list.blocks.length
       ? h("div", { class: "card" }, table(["Height", "Hash", "Time", "Signer", "Msgs", "Rot.", "Size"], rows, [4, 5, 6]),
         list.older ? h("div", { class: "pager" }, link(`#/blocks/${list.older}`, "Older blocks", { class: "btn" })) : null)
@@ -103,7 +104,7 @@ async function viewBlock(ref) {
     h("div", { class: "card" }, kv([
       ["status", h("span", { class: `badge ${b.canonical ? "confirmed" : "bad"}` }, b.canonical ? `canonical · ${b.confirmations} confirmation${b.confirmations === 1 ? "" : "s"}` : "side branch")],
       ["hash", h("span", { class: "hash" }, b.hash)],
-      ["time", time(hd.time)],
+      ["time", b.timestamp ? `${time(b.timestamp.time)}, timestamped by ${b.timestamp.authority}` : `${time(hd.time)}, from the signer's clock`],
       ["previous", b.prevIsGenesis ? h("span", {}, "genesis ", link("#/node", short(b.prev), { class: "hash", title: b.prev })) : hashLink(b.prev)],
       ["next", b.next ? hashLink(b.next) : "–"],
       ["signed by", keyLink(hd.signer)],
@@ -111,9 +112,6 @@ async function viewBlock(ref) {
       ["rotations", `${hd.rotationCount}${hd.rotationCount ? ` (root ${short(hd.rotationsRoot)})` : ""}`],
       ["size", bytes(b.size)],
       ["signature", h("span", { class: "hash", title: "ECDSA over the block hash" }, short(b.signature, 20, 8))],
-      ["timestamps", b.timestamps.length
-        ? b.timestamps.map((s, i) => [i ? h("br", {}) : null, `${time(s.time)}, by ${s.authority}`])
-        : "none yet"],
       ["raw", link(`api/v1/blocks/${b.hash}`, "block JSON")],
     ])),
     h("h2", {}, "Messages"),

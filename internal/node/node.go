@@ -40,12 +40,9 @@ type Options struct {
 	NoPeerExchange    bool   // use only the peers named in Peers
 	AllowPrivatePeers bool   // let learned peers have loopback/private addresses (tests, closed networks)
 
-	// Timestamping (see timestamps.go). A node with signing keys requests tokens;
-	// every node stores, serves and syncs them.
-	NoTimestamp   bool            // do not request tokens
-	TSAs          []tsa.Authority // default tsa.Default
-	TSARoots      *x509.CertPool  // default tsa.Roots()
-	TimestampPoll time.Duration   // how often to look for unstamped blocks; default 1m
+	Features chain.Schedule  // which features apply from which height
+	TSAs     []tsa.Authority // default tsa.Default
+	TSARoots *x509.CertPool  // default tsa.Roots()
 }
 
 // Node is a running instance.
@@ -65,7 +62,6 @@ type Node struct {
 	staticOnce   sync.Once
 	staticShared []string // operator peers that may be shared
 	ocspHTTP     *http.Client
-	stamps       *tsa.Book
 	tsaHTTP      *http.Client
 	meta         sync.Map // payload ID -> msgMeta
 	syncing      sync.Map // peer base URL -> a sync is running
@@ -95,7 +91,7 @@ func New(opt Options) (*Node, error) {
 	if opt.MaxPending <= 0 {
 		opt.MaxPending = 5000
 	}
-	st, err := chain.Open(opt.Data, opt.GenesisHash)
+	st, err := chain.Open(opt.Data, opt.GenesisHash, chain.Options{Features: opt.Features, TSARoots: opt.TSARoots})
 	if err != nil {
 		return nil, err
 	}
@@ -126,17 +122,6 @@ func New(opt Options) (*Node, error) {
 	}
 	if n.opt.TSAs == nil {
 		n.opt.TSAs = tsa.Default
-	}
-	if n.opt.TSARoots == nil {
-		n.opt.TSARoots = tsa.Roots()
-	}
-	if n.opt.TimestampPoll <= 0 {
-		n.opt.TimestampPoll = time.Minute
-	}
-	var skipped []string
-	n.stamps, skipped = tsa.OpenBook(opt.Data, n.opt.TSARoots)
-	for _, line := range skipped {
-		log.Printf("timestamps: skipping %s", line)
 	}
 	n.tsaHTTP = &http.Client{Timeout: 30 * time.Second}
 	n.safeHTTP = safeHTTPClient(opt.AllowPrivatePeers)
@@ -179,11 +164,6 @@ func (n *Node) Run(ctx context.Context) error {
 	go func() { errc <- srv.ListenAndServe() }()
 	go n.produceLoop(ctx)
 	go n.syncLoop(ctx)
-	if len(n.signers) > 0 && !n.opt.NoTimestamp {
-		for _, a := range n.opt.TSAs {
-			go n.stampLoop(ctx, a)
-		}
-	}
 	log.Printf("listening on %s", n.opt.Listen)
 	select {
 	case <-ctx.Done():
@@ -365,8 +345,25 @@ func (n *Node) eligibleSigner(parent chain.Parent) (chain.Signer, bool) {
 	return chain.Signer{}, false
 }
 
+// requestTimestamp gets one token, trying the authorities in order. Without one no
+// block can be made, because the token is part of the block.
+func (n *Node) requestTimestamp(hash chain.Hash) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	var last error
+	for _, a := range n.opt.TSAs {
+		token, _, err := tsa.Request(ctx, n.tsaHTTP, a.URL, hash, n.store.P.TSARoots)
+		if err == nil {
+			return token, nil
+		}
+		log.Printf("timestamp from %s: %v", a.Name, err)
+		last = err
+	}
+	return nil, fmt.Errorf("no timestamp authority answered: %w", last)
+}
+
 // blockOverhead is a safe bound on a block's JSON apart from its payloads and rotations.
-const blockOverhead = 2048
+const blockOverhead = 2048 + tsa.MaxToken*2 // the token, as base64, and its hash
 
 // produce cuts a block from pending payloads and ready rotations, if any.
 func (n *Node) produce() {
@@ -426,10 +423,23 @@ func (n *Node) produce() {
 	if len(entries) == 0 && len(rots) == 0 {
 		return
 	}
+	height := parent.Height + 1
 	b := &chain.Block{
-		Header:    chain.Header{Height: parent.Height + 1, Prev: parent.Hash, Time: now},
+		Header:    chain.Header{Version: n.store.P.Features.VersionAt(height), Height: height, Prev: parent.Hash, Time: now},
 		Payloads:  entries,
 		Rotations: rots,
+	}
+	if n.store.P.Features.Active(chain.FeatureBlockTimestamps, height) {
+		if err := chain.PrepareBlock(signer, b); err != nil {
+			log.Printf("prepare block: %v", err)
+			return
+		}
+		token, err := n.requestTimestamp(b.ContentHash())
+		if err != nil {
+			log.Printf("no block at height %d this round, the messages stay pending: %v", height, err)
+			return
+		}
+		b.SetTimestamp(token)
 	}
 	if err := chain.SignBlock(signer, b); err != nil {
 		log.Printf("sign block: %v", err)

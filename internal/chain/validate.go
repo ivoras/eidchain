@@ -2,6 +2,7 @@ package chain
 
 import (
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -9,10 +10,15 @@ import (
 	"fmt"
 	"time"
 	"unicode/utf8"
+
+	"eidchain/internal/tsa"
 )
 
 // MaxClockSkew is how far ahead of local time a block timestamp may be.
 const MaxClockSkew = 5 * time.Minute
+
+// MaxTimestampSkew is how far a block's timestamp token may be from its time.
+const MaxTimestampSkew = 5 * time.Minute
 
 // MaxBlockBytes caps a block's JSON. It must stay below what nodes accept when a
 // block is pushed to them (16 MiB, and the same in nginx) or a valid block could
@@ -73,6 +79,49 @@ func (p *Params) VerifyPayload(e PayloadEntry, at time.Time) (*PayloadInfo, erro
 	}, nil
 }
 
+// checkTimestamp applies the block-timestamps feature: from its height a block must
+// carry a token over its content hash, committed to by the block hash, from an
+// authority whose time agrees with the block's. Below that height it must have no
+// token. The certificate chain is judged at the token's own time, so the verdict
+// does not depend on when a block is checked.
+func (p *Params) checkTimestamp(b *Block) error {
+	h := b.Header
+	if !p.Features.Active(FeatureBlockTimestamps, h.Height) {
+		if b.Timestamp != "" || h.TimestampHash != nil {
+			return errors.New("a timestamp is not allowed at this height")
+		}
+		return nil
+	}
+	if b.Timestamp == "" || h.TimestampHash == nil {
+		return errors.New("the block has no timestamp")
+	}
+	token, err := base64.StdEncoding.DecodeString(b.Timestamp)
+	if err != nil {
+		return errors.New("timestamp is not valid base64")
+	}
+	if sha256.Sum256(token) != *h.TimestampHash {
+		return errors.New("timestampHash does not match the timestamp")
+	}
+	info, err := tsa.Verify(token, b.ContentHash(), p.TSARoots)
+	if err != nil {
+		return fmt.Errorf("timestamp: %w", err)
+	}
+	if d := info.Time.Sub(time.Unix(h.Time, 0)).Abs(); d > MaxTimestampSkew {
+		return fmt.Errorf("the timestamp is %s away from the block time", d.Round(time.Second))
+	}
+	return nil
+}
+
+// BlockTimestamp reads the token of a block that passed validation.
+func (p *Params) BlockTimestamp(b *Block) (tsa.Info, bool) {
+	token, err := base64.StdEncoding.DecodeString(b.Timestamp)
+	if err != nil || len(token) == 0 {
+		return tsa.Info{}, false
+	}
+	info, err := tsa.Verify(token, b.ContentHash(), p.TSARoots)
+	return info, err == nil
+}
+
 // Parent describes the block a new block builds on.
 type Parent struct {
 	Hash   Hash
@@ -104,8 +153,8 @@ func (p *Params) CanSign(id string, parent Parent) bool {
 // is only used to reject timestamps too far in the future.
 func (p *Params) ValidateBlock(b *Block, parent Parent, now time.Time) (*State, error) {
 	h := b.Header
-	if h.Version != Version {
-		return nil, fmt.Errorf("unsupported block version %d", h.Version)
+	if want := p.Features.VersionAt(h.Height); h.Version != want {
+		return nil, fmt.Errorf("block version %d at height %d, expected %d", h.Version, h.Height, want)
 	}
 	if h.Height != parent.Height+1 {
 		return nil, fmt.Errorf("height %d does not follow parent height %d", h.Height, parent.Height)
@@ -154,6 +203,9 @@ func (p *Params) ValidateBlock(b *Block, parent Parent, now time.Time) (*State, 
 	}
 	if raw, err := json.Marshal(b); err != nil || len(raw) > MaxBlockBytes {
 		return nil, fmt.Errorf("block is larger than %d bytes", MaxBlockBytes)
+	}
+	if err := p.checkTimestamp(b); err != nil {
+		return nil, err
 	}
 	at := time.Unix(h.Time, 0)
 	seen := map[Hash]bool{}

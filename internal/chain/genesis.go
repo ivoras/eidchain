@@ -2,6 +2,7 @@ package chain
 
 import (
 	"crypto/ecdsa"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,6 +68,12 @@ type Params struct {
 	Initial *State
 	Trust   *TrustStore
 	Rules   Rules
+
+	// Features says which features apply from which height.
+	Features Schedule
+	// TSARoots are the roots trusted for block timestamps. They are consensus
+	// rules, pinned in the binary with the feature rather than in the genesis.
+	TSARoots *x509.CertPool
 }
 
 // NewParams validates g and prepares it for use.

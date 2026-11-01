@@ -47,7 +47,7 @@ func newEnv(t *testing.T, authorities int) *env {
 		t.Fatal(err)
 	}
 	e.genesis = g
-	if e.store, err = chain.Init(e.dir, g); err != nil {
+	if e.store, err = chain.Init(e.dir, g, chain.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	e.card = e.pki.Leaf(t, "PERA PERIC", x509.KeyUsageContentCommitment|x509.KeyUsageDigitalSignature, false)
