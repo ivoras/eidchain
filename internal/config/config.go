@@ -5,8 +5,11 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+
+	"eidchain/internal/chain"
 )
 
 // File is the on-disk configuration. Every field is optional.
@@ -43,8 +46,8 @@ func Load(dir string) (File, error) {
 	if err != nil {
 		return f, err
 	}
-	if err := json.Unmarshal(raw, &f); err != nil {
-		return f, err
+	if err := chain.StrictUnmarshal(raw, &f); err != nil {
+		return File{}, fmt.Errorf("%s: %w", path(dir), err) // a misspelt setting must not be ignored
 	}
 	return f, nil
 }

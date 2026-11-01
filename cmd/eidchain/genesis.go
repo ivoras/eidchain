@@ -72,6 +72,19 @@ func cmdGenesis(args []string) error {
 			count = 0
 		}
 	}
+	cfg, err := config.Load(*data)
+	if err != nil {
+		return err
+	}
+	anchors, err := resolveTrustCAs(cas, cfg, *data)
+	if err != nil {
+		return err
+	}
+	// Everything that can fail on bad input comes before this, so a mistake on the
+	// command line leaves no stray private keys behind.
+	if total := len(auths) + count; *quorum < 0 || *quorum > total {
+		return fmt.Errorf("--rotation-quorum must be between 1 and %d", total)
+	}
 	var newKeys []string
 	for i := 0; i < count; i++ {
 		key, err := chain.GenerateKey()
@@ -85,14 +98,6 @@ func cmdGenesis(args []string) error {
 		newKeys = append(newKeys, path)
 		enc, _ := chain.EncodePublicKey(&key.PublicKey)
 		auths = append(auths, chain.Authority{Name: fmt.Sprintf("authority-%d", len(auths)+1), PublicKey: enc})
-	}
-	cfg, err := config.Load(*data)
-	if err != nil {
-		return err
-	}
-	anchors, err := resolveTrustCAs(cas, cfg, *data)
-	if err != nil {
-		return err
 	}
 	g, err := chain.NewGenesis(*message, auths, anchors, when)
 	if err != nil {

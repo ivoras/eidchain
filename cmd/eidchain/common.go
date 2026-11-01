@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -76,13 +77,20 @@ func parseDuration(name, v string) (time.Duration, error) {
 	return d, nil
 }
 
-// serverArg picks the node to talk to: the flag, else the first configured peer.
+// serverArg picks the node to talk to: the flag, else the first configured peer,
+// else this data directory's own node.
 func serverArg(flagVal, dataDir string) string {
 	if flagVal != "" {
 		return flagVal
 	}
-	if cfg, err := config.Load(dataDir); err == nil && len(cfg.Peers) > 0 {
+	cfg, err := config.Load(dataDir)
+	if err == nil && len(cfg.Peers) > 0 {
 		return cfg.Peers[0]
+	}
+	if err == nil {
+		if _, port, perr := net.SplitHostPort(cfg.Listen); perr == nil && port != "" {
+			return "http://localhost:" + port
+		}
 	}
 	return "http://localhost:8080"
 }

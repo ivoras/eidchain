@@ -100,12 +100,13 @@ func cmdVerify(args []string) error {
 func cmdInfo(args []string) error {
 	fs := newFlagSet("info")
 	data := fs.String("data", defaultData(), "data directory (to find a configured peer)")
+	serverFlag := fs.String("server", "", "node URL, like the positional argument")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
-	server := ""
-	if len(pos) > 0 {
+	server := *serverFlag
+	if server == "" && len(pos) > 0 {
 		server = pos[0]
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

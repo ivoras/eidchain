@@ -301,6 +301,8 @@ Generates `--authorities` new keys (default 3, or none if you pass existing publ
 
 ### `submit`
 
+Commands that talk to a node use `--server URL`, else the first peer in `config.json`, else `localhost` on the port of `listen` in `config.json`, else `localhost:8080`.
+
 `eidchain submit [--server URL] PAYLOAD-FILE SIGNATURE-FILE` sends a record that you signed elsewhere, for example with the `/signer/` page (the signature file may be DER, PEM or Base64 `.p7s`). The payload file's exact bytes are what the signature covers, and the record must be a JSON object with a `chain` field holding the chain's genesis hash. Nodes refuse submissions without it, so a signature cannot be replayed from another chain, and a signed document that was not written for this chain cannot be published on it.
 
 ### `cert`
@@ -309,7 +311,7 @@ Generates `--authorities` new keys (default 3, or none if you pass existing publ
 
 ## Configuration file
 
-`<data>/config.json` provides defaults; flags win. All fields are optional.
+`<data>/config.json` provides defaults; flags win. All fields are optional, and an unknown field is an error, so a misspelt setting cannot be silently ignored.
 
 ```json
 {

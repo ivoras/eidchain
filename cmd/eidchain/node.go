@@ -74,6 +74,9 @@ func cmdNode(args []string) error {
 	if err != nil {
 		return err
 	}
+	if bi <= 0 || si <= 0 {
+		return fmt.Errorf("--block-interval and --sync-interval must be positive")
+	}
 	n, err := node.New(node.Options{
 		Data: *data, KeysDir: *keys, Listen: *listen, Peers: peers, BlockInterval: bi, SyncInterval: si,
 		OCSP: *ocsp, Web: !*noWeb, GenesisHash: gh,

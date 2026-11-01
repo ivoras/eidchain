@@ -14,21 +14,31 @@ if [ ! -f data/genesis.json ]; then
   exit 1
 fi
 
+echo "== nginx"
+# Test the new config before committing to it, and put the old one back if it fails,
+# so a mistake here cannot stop nginx at its next restart. The site also serves
+# other pages, so do this before touching the node.
+live=/etc/nginx/sites-available/eidchain
+backup="$(mktemp)"
+sudo cp "$live" "$backup" 2>/dev/null || : > "$backup"
+# The eID CA bundle that nginx uses to verify client certificates.
+sudo cp www/hr-eid-ca.pem /etc/nginx/hr-eid-ca.pem
+sudo cp deploy/nginx-eidchain.conf "$live"
+sudo ln -sf "$live" /etc/nginx/sites-enabled/eidchain
+if ! sudo nginx -t; then
+  echo "nginx rejected the new config; restoring the previous one" >&2
+  if [ -s "$backup" ]; then sudo cp "$backup" "$live"; else sudo rm -f "$live" /etc/nginx/sites-enabled/eidchain; fi
+  rm -f "$backup"
+  exit 1
+fi
+rm -f "$backup"
+
 echo "== systemd unit"
 sudo cp deploy/eidchain.service /etc/systemd/system/eidchain.service
 sudo systemctl daemon-reload
 sudo systemctl enable eidchain
 sudo systemctl restart eidchain
 
-echo "== nginx"
-# The eID CA bundle that nginx uses to verify client certificates.
-sudo cp www/hr-eid-ca.pem /etc/nginx/hr-eid-ca.pem
-# The live site config is managed by certbot too; only replace it if it differs.
-if ! sudo cmp -s deploy/nginx-eidchain.conf /etc/nginx/sites-available/eidchain; then
-  sudo cp deploy/nginx-eidchain.conf /etc/nginx/sites-available/eidchain
-fi
-sudo ln -sf /etc/nginx/sites-available/eidchain /etc/nginx/sites-enabled/eidchain
-sudo nginx -t
 sudo systemctl reload nginx
 
 echo "== status"

@@ -2,6 +2,8 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 )
@@ -52,6 +54,9 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usage)
 		os.Exit(2)
+	}
+	if errors.Is(err, flag.ErrHelp) {
+		return // the flag package has already printed the usage
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
