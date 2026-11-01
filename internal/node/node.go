@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -49,6 +50,10 @@ type Node struct {
 	safeHTTP  *http.Client     // client for learned peers: refuses non-public addresses
 	selfURL   string           // normalized Advertise
 	staticSet map[string]bool  // normalized operator peers
+	lookupIP  func(context.Context, string) ([]net.IPAddr, error)
+
+	staticOnce   sync.Once
+	staticShared []string // operator peers that may be shared
 	ocspHTTP  *http.Client
 	meta      sync.Map // payload ID -> msgMeta
 	kick      chan struct{}
@@ -89,6 +94,7 @@ func New(opt Options) (*Node, error) {
 		opt: opt, store: st, pool: pool, rots: newRotationPool(), signers: signers,
 		ocspHTTP: &http.Client{Timeout: 10 * time.Second}, kick: make(chan struct{}, 1),
 	}
+	n.lookupIP = net.DefaultResolver.LookupIPAddr
 	n.staticSet = map[string]bool{}
 	for _, p := range opt.Peers {
 		n.peers = append(n.peers, remote.New(p))

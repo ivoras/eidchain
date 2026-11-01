@@ -322,6 +322,50 @@ func (n *Node) exchange(ctx context.Context, p *remote.Client) {
 	}
 }
 
+// publicStaticPeers lists the operator's peers that are safe to tell others
+// about, in a normal form with no credentials. A host name only qualifies if every
+// address it resolves to is public, so names on an internal DNS stay private; if
+// the lookup fails, the peer is left out. The answer is worked out once.
+func (n *Node) publicStaticPeers() []string {
+	n.staticOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		for _, p := range n.peers {
+			norm, err := normalizePeerURL(p.Base)
+			if err != nil {
+				continue // for example credentials in the URL: never published
+			}
+			if n.opt.AllowPrivatePeers || n.resolvesPublic(ctx, norm) {
+				n.staticShared = append(n.staticShared, norm)
+			}
+		}
+	})
+	return n.staticShared
+}
+
+func (n *Node) resolvesPublic(ctx context.Context, normalized string) bool {
+	if privateLiteral(normalized) {
+		return false
+	}
+	u, err := url.Parse(normalized)
+	if err != nil {
+		return false
+	}
+	if ip := net.ParseIP(u.Hostname()); ip != nil {
+		return publicIP(ip)
+	}
+	addrs, err := n.lookupIP(ctx, u.Hostname())
+	if err != nil || len(addrs) == 0 {
+		return false
+	}
+	for _, a := range addrs {
+		if !publicIP(a.IP) {
+			return false
+		}
+	}
+	return true
+}
+
 // shareablePeers are the peers this node tells others about: itself, the
 // operator's public peers, and learned peers that are answering.
 func (n *Node) shareablePeers() []string {
@@ -334,10 +378,8 @@ func (n *Node) shareablePeers() []string {
 		}
 	}
 	add(n.selfURL)
-	for _, p := range n.peers {
-		if n.opt.AllowPrivatePeers || !privateLiteral(p.Base) {
-			add(p.Base)
-		}
+	for _, u := range n.publicStaticPeers() {
+		add(u)
 	}
 	n.book.mu.Lock()
 	defer n.book.mu.Unlock()

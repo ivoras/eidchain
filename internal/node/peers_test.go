@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -260,10 +261,20 @@ func TestShareablePeers(t *testing.T) {
 			t.Fatal(err)
 		}
 		n, err := New(Options{Data: dir, Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip",
-			Advertise: "https://node.example/chain/", Peers: []string{"http://127.0.0.1:9", "https://other.example/x/", "http://192.168.1.5:80"},
+			Advertise: "https://node.example/chain/", Peers: []string{"http://127.0.0.1:9", "https://other.example/x/", "http://192.168.1.5:80",
+				"https://user:secret@other.example", "http://chain-b.corp:8080", "http://unresolvable.example"},
 			AllowPrivatePeers: allowPrivate})
 		if err != nil {
 			t.Fatal(err)
+		}
+		n.lookupIP = func(_ context.Context, host string) ([]net.IPAddr, error) {
+			switch host {
+			case "other.example":
+				return []net.IPAddr{{IP: net.ParseIP("198.51.100.7")}}, nil
+			case "chain-b.corp":
+				return []net.IPAddr{{IP: net.ParseIP("10.1.2.3")}}, nil
+			}
+			return nil, errors.New("no such host")
 		}
 		n.book.learned["https://learned.example"] = &learnedPeer{URL: "https://learned.example", LastOK: 1}
 		n.book.learned["https://silent.example"] = &learnedPeer{URL: "https://silent.example"}                        // never answered
@@ -275,7 +286,7 @@ func TestShareablePeers(t *testing.T) {
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("public node shares %v, want %v", got, want)
 	}
-	if all := mk(true).shareablePeers(); len(all) != 5 {
+	if all := mk(true).shareablePeers(); len(all) != 7 || strings.Contains(strings.Join(all, " "), "secret") {
 		t.Errorf("a closed network shares private peers too, got %v", all)
 	}
 }
