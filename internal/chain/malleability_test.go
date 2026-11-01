@@ -84,3 +84,14 @@ func TestStrictUnmarshalRejectsAmbiguousJSON(t *testing.T) {
 		t.Errorf("canonical genesis refused: %v", err)
 	}
 }
+
+// A deeply nested document must be refused, not overflow the stack: that is a
+// fatal error in Go, which no recover() can catch.
+func TestStrictUnmarshalRefusesDeepNesting(t *testing.T) {
+	for _, doc := range []string{strings.Repeat("[", 16<<20), strings.Repeat(`{"a":`, 3<<20)} {
+		var b chain.Block
+		if err := chain.StrictUnmarshal([]byte(doc), &b); err == nil {
+			t.Fatal("deeply nested JSON was accepted")
+		}
+	}
+}

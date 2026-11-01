@@ -15,13 +15,16 @@ import (
 //
 //   - duplicate object keys (Go's decoder keeps the last, other parsers the first),
 //   - field names that only match case-insensitively ("HEIGHT" for "height"),
-//   - unknown fields, and trailing data after the value.
+//   - unknown fields, trailing data after the value,
+//   - nesting deeper than maxJSONDepth. The walk is recursive and a Go stack
+//     overflow cannot be recovered from, so depth must be bounded before the
+//     input size is: a 16 MiB body of "[" would otherwise kill the process.
 //
 // Block hashes are computed from the parsed value, so none of these could forge
 // a block, but a second implementation might read such a document differently.
 func StrictUnmarshal(raw []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	if err := walk(dec, reflect.TypeOf(v)); err != nil {
+	if err := walk(dec, reflect.TypeOf(v), 0); err != nil {
 		return err
 	}
 	if _, err := dec.Token(); err != io.EOF {
@@ -32,8 +35,14 @@ func StrictUnmarshal(raw []byte, v any) error {
 	return d.Decode(v)
 }
 
+// maxJSONDepth is far deeper than any document this program defines.
+const maxJSONDepth = 32
+
 // walk follows the token stream together with the Go type being decoded.
-func walk(dec *json.Decoder, t reflect.Type) error {
+func walk(dec *json.Decoder, t reflect.Type, depth int) error {
+	if depth > maxJSONDepth {
+		return fmt.Errorf("JSON is nested deeper than %d levels", maxJSONDepth)
+	}
 	for t != nil && t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
@@ -76,7 +85,7 @@ func walk(dec *json.Decoder, t reflect.Type) error {
 					return fmt.Errorf("unknown field %q (field names are case-sensitive)", key)
 				}
 			}
-			if err := walk(dec, ft); err != nil {
+			if err := walk(dec, ft, depth+1); err != nil {
 				return err
 			}
 		}
@@ -88,7 +97,7 @@ func walk(dec *json.Decoder, t reflect.Type) error {
 			et = t.Elem()
 		}
 		for dec.More() {
-			if err := walk(dec, et); err != nil {
+			if err := walk(dec, et, depth+1); err != nil {
 				return err
 			}
 		}
