@@ -7,6 +7,15 @@
 /data/*
 !/data/.gitignore
 *.key
+*.p12
+*.pfx
+*.jks
+*.pk8
+*.keystore
+id_rsa*
+id_ecdsa*
+id_ed25519*
+.env
 
 # Local scratch and editor files
 *.test

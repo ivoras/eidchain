@@ -417,3 +417,119 @@ func TestExplorerAPI(t *testing.T) {
 		}
 	}
 }
+
+// A pull must find where its chain and the remote's diverged, fetch from there,
+// and let the fork rule decide: the longer remote branch wins and the local
+// branch's message goes back to being unconfirmed.
+func TestPullResolvesAForkAndNeverGoesBackwards(t *testing.T) {
+	ctx := context.Background()
+	pki := testpki.New(t)
+	card := pki.Leaf(t, "PERA PERIC", x509.KeyUsageContentCommitment, false)
+	var keys []chain.Signer
+	var auths []chain.Authority
+	for i := 0; i < 3; i++ {
+		k, _ := chain.GenerateKey()
+		id, _ := chain.KeyID(&k.PublicKey)
+		pub, _ := chain.EncodePublicKey(&k.PublicKey)
+		keys = append(keys, chain.Signer{ID: id, Key: k})
+		auths = append(auths, chain.Authority{PublicKey: pub})
+	}
+	g, err := chain.NewGenesis("fork test", auths, []string{pki.RootPEM, pki.InterPEM}, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mkStore := func() *chain.Store {
+		st, err := chain.Init(t.TempDir(), g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	entry := func(text string) chain.PayloadEntry {
+		p := `{"type":"message","text":"` + text + `"}`
+		return chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, card, []byte(p)))}
+	}
+	extend := func(st *chain.Store, parent *chain.Block, signer chain.Signer, text string) *chain.Block {
+		prev, height := st.Head()
+		if parent != nil {
+			prev, height = parent.Hash(), parent.Header.Height
+		}
+		b := &chain.Block{Header: chain.Header{Height: height + 1, Prev: prev, Time: time.Now().Unix()}, Payloads: []chain.PayloadEntry{entry(text)}}
+		if err := chain.SignBlock(signer, b); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.AddBlock(b); err != nil {
+			t.Fatalf("add %s: %v", text, err)
+		}
+		return b
+	}
+
+	// The remote node (Y) and the local store (X) share block 1, then diverge.
+	dirY := t.TempDir()
+	if _, err := chain.Init(dirY, g); err != nil {
+		t.Fatal(err)
+	}
+	ny, err := New(Options{Data: dirY, Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(ny.Handler())
+	defer srv.Close()
+	x := mkStore()
+	common := extend(ny.Store(), nil, keys[0], "common")
+	if _, err := x.AddBlock(common); err != nil {
+		t.Fatal(err)
+	}
+	x2 := extend(x, common, keys[1], "only on X") // X's branch: height 2
+	y2 := extend(ny.Store(), common, keys[2], "on Y, block 2")
+	y3 := extend(ny.Store(), y2, keys[0], "on Y, block 3") // Y's branch is longer: height 3
+	if _, h := x.Head(); h != 2 {
+		t.Fatalf("X at height %d, want 2", h)
+	}
+	if !x.OnChain(x2.Payloads[0].ID()) {
+		t.Fatal("X lost its own message before the pull")
+	}
+
+	res, err := remote.Sync(ctx, x, remote.New(srv.URL), nil)
+	if err != nil {
+		t.Fatalf("pull across a fork: %v", err)
+	}
+	if head, h := x.Head(); head != y3.Hash() || h != 3 || res.Height != 3 {
+		t.Fatalf("after the pull X is at height %d (%s), want Y's block 3", h, head.Short())
+	}
+	if res.Fetched != 2 {
+		t.Errorf("fetched %d blocks, want 2 (it must start at the fork point, not at genesis)", res.Fetched)
+	}
+	if x.OnChain(x2.Payloads[0].ID()) {
+		t.Error("X's orphaned message is still counted as on the chain")
+	}
+	if !x.OnChain(y2.Payloads[0].ID()) || !x.OnChain(y3.Payloads[0].ID()) {
+		t.Error("Y's messages are not on X's chain after the pull")
+	}
+	if h, err := x.Verify(); err != nil || h != 3 {
+		t.Fatalf("verify after the fork: %d %v", h, err)
+	}
+
+	// Pulling again changes nothing, and pulling from a node that is behind never moves X back.
+	if res, err = remote.Sync(ctx, x, remote.New(srv.URL), nil); err != nil || !res.UpToDate {
+		t.Fatalf("second pull: %+v %v", res, err)
+	}
+	behind := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A stale node: the same chain, truncated to block 1.
+		nb, _ := New(Options{Data: func() string {
+			d := t.TempDir()
+			chain.Init(d, g)
+			st, _ := chain.Open(d, g.Hash())
+			st.AddBlock(common)
+			return d
+		}(), Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip"})
+		nb.Handler().ServeHTTP(w, r)
+	}))
+	defer behind.Close()
+	if res, err = remote.Sync(ctx, x, remote.New(behind.URL), nil); err != nil || res.Height != 3 {
+		t.Fatalf("pull from a node that is behind: %+v %v", res, err)
+	}
+	if head, h := x.Head(); head != y3.Hash() || h != 3 {
+		t.Fatal("pulling from a node that is behind moved the local head")
+	}
+}

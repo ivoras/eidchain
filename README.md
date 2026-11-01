@@ -234,6 +234,34 @@ Status: Downloaded newer chain for http://host:8080 (height 0 -> 42, 120ms)
 
 The first pull in a directory needs the genesis hash (flag, `EIDCHAIN_GENESIS_HASH`, or `config.json`); `--trust-first-use` accepts whatever the server offers. Every block is validated locally. Later pulls are incremental and find the fork point if the remote's chain differs. The genesis hash and the server are remembered in `config.json`.
 
+#### Pull a chain and run a node from it
+
+The whole workflow, as tested against the live PoC chain:
+
+```sh
+# 1. Pull. The genesis hash is the chain's identity: get it from whoever runs the chain.
+eidchain pull --data ./mychain \
+    --genesis-hash 1a96878e47753109e410c9a7980397182502a4930cd9f495957da20ae2645a82 \
+    https://eidchain.ivoras.net/chain
+
+# 2. Optional: re-verify everything from the genesis, offline.
+eidchain verify --data ./mychain
+
+# 3. Run a node on it.
+eidchain node --data ./mychain --listen :8080
+```
+
+- **Getting the hash.** Take it from a source you trust, not from the server you are pulling from: the server can only tell you what its own genesis hashes to. (`eidchain info URL` and the explorer's *node* page show it, which is handy for checking against what you were told.) `--trust-first-use` skips the check and says so loudly.
+- **What the pull verifies.** The genesis must hash to the value you gave. Every block is then fully validated before it is stored: the authority signature, the Merkle roots, the link to its parent, the signer rules, every message's CAdES signature and certificate chain, and key rotations. A tampering or buggy server is refused (`block 1 from … rejected: block signature is invalid`) and the bad block is not stored. A pull that fails never leaves invalid data behind: if the server cannot be reached or the genesis does not match, no directory is created; if it fails later, the directory holds the verified genesis and the verified blocks fetched so far, and running the pull again continues from there.
+- **Incremental.** A second `pull` into the same directory asks the server for its head, finds the last block both sides share (also when your copy had forked away) and fetches only what follows. If you already have the server's head it says `Chain is up to date`. A pull never moves your chain backwards.
+- **One chain per directory.** Pulling a server with a different genesis into a directory that already holds a chain is refused.
+- **Remembered settings.** `<data>/config.json` records the genesis hash and the server you pulled from as a peer, so later commands need no flags.
+- **Running the node.** A node started on the directory is a *follower*: it serves the API, the web app and the explorer, re-verifies what it holds, accepts submitted messages and gossips them, and syncs from its peers (the server you pulled from, unless you add `--peer`) every `--sync-interval`, so it stays current by itself. It does not cut blocks, because it holds no authority key (`0 local signing key(s)` in its log; `canProduce: false` in `/api/v1/info`). A node refuses to start on a directory whose genesis does not match `--genesis-hash`.
+- **Passing it on.** A follower serves the chain like any node, so others can `pull` from it.
+- **Don't pull into a running node's directory.** The node keeps the chain in memory and would not notice blocks that `pull` wrote behind its back until it restarts, and it does not need them: it syncs by itself.
+- **Becoming an authority.** Only a key that is in the chain's authority set (the genesis keys, as changed by rotations) can sign blocks. If you hold one, put its `*.key` file in `<data>/keys/` and restart the node. Otherwise an existing authority has to rotate you in; see [Key rotation](#key-rotation).
+- **Behind nginx or on a sub-path.** The URL may include a path: `https://host/chain` works.
+
 ### `genesis`
 
 ```
@@ -345,7 +373,7 @@ go vet ./...
 go test -race ./...
 ```
 
-The tests cover CAdES verification (including signatures produced by the browser-side JavaScript signer), the consensus rules, forks and reorgs, key rotation (quorum, replay, retired keys), reopening and re-verifying a stored chain, and a multi-node run over real HTTP with gossip, pull, rotation and the embedded web app.
+The tests cover pulling (including finding the fork point of a diverged chain and never moving backwards), CAdES verification (including signatures produced by the browser-side JavaScript signer), the consensus rules, forks and reorgs, key rotation (quorum, replay, retired keys), reopening and re-verifying a stored chain, and a multi-node run over real HTTP with gossip, pull, rotation and the embedded web app.
 
 ```
 cmd/eidchain/        CLI
@@ -361,6 +389,22 @@ genesis/             public genesis files
 www/                 the eidchain.ivoras.net website, including /signer/, and the shared site.css and nav.js
 scripts/             helper scripts
 ```
+
+### Keeping private keys out of git
+
+Authority private keys (`data/keys/*.key`) and all chain data live in `data/`, which is git-ignored. Three layers stop a key from being published by accident:
+
+1. **`.gitignore`** excludes `data/`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.pk8`, `id_*` and `.env`.
+2. **`.githooks/pre-commit`** refuses a commit that adds a PEM/PGP private key block, a key-like file name, or anything under `data/` (even with `git add -f`).
+3. **`.githooks/pre-push`** re-checks every commit about to be pushed, so a leak committed with `--no-verify` or buried in history is still caught.
+
+Both hooks run `scripts/check-no-private-keys.sh`, which you can also run by hand (`--all` scans the whole history). Hooks are not copied by `git clone`, so enable them once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+If a key ever does get pushed, treat it as compromised: rotate it (see [Key rotation](#key-rotation)) rather than just deleting the commit.
 
 ## Limitations
 

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocks commits that add private keys. Enable with: git config core.hooksPath .githooks
+exec "$(git rev-parse --show-toplevel)/scripts/check-no-private-keys.sh" --staged

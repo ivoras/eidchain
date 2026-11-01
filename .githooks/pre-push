@@ -1,0 +1,11 @@
+#!/bin/sh
+# Blocks pushes whose new commits contain private keys, even if they were committed
+# with the pre-commit hook bypassed. Enable with: git config core.hooksPath .githooks
+root="$(git rev-parse --show-toplevel)"
+zero=0000000000000000000000000000000000000000
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue          # a branch deletion
+  if [ "$remote_sha" = "$zero" ]; then range="$local_sha"; else range="$remote_sha..$local_sha"; fi
+  "$root/scripts/check-no-private-keys.sh" --range "$range" || exit 1
+done
+exit 0
