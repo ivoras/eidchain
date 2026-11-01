@@ -131,3 +131,55 @@ func structFields(t reflect.Type) map[string]reflect.Type {
 	}
 	return out
 }
+
+// CheckPayloadJSON requires s to be one JSON object that every parser reads the
+// same way: no duplicate keys, and no keys that differ only in case, at any
+// level. This is the text people sign, so it is where ambiguity matters most:
+// a record must not display as one message here and another elsewhere.
+func CheckPayloadJSON(s string) error {
+	dec := json.NewDecoder(strings.NewReader(s))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return errors.New("payload is not a JSON object")
+	}
+	if err := walkPayload(dec, '{', 1); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return errors.New("trailing data after the JSON object")
+	}
+	return nil
+}
+
+// walkPayload consumes a container whose opening delimiter was already read.
+func walkPayload(dec *json.Decoder, open json.Delim, depth int) error {
+	if depth > maxJSONDepth {
+		return fmt.Errorf("JSON is nested deeper than %d levels", maxJSONDepth)
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		if open == '{' {
+			kt, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			// ToUpper then ToLower folds what encoding/json folds, such as the Kelvin sign.
+			key := strings.ToLower(strings.ToUpper(kt.(string)))
+			if seen[key] {
+				return fmt.Errorf("duplicate or case-variant key %q", kt)
+			}
+			seen[key] = true
+		}
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if d, ok := tok.(json.Delim); ok {
+			if err := walkPayload(dec, d, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := dec.Token() // the closing delimiter
+	return err
+}

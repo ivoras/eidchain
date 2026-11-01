@@ -86,12 +86,15 @@ func summarize(b *chain.Block, canonical bool) blockSummary {
 }
 
 func preview(payload string) string {
-	var m struct {
-		Text string `json:"text"`
-	}
+	// A map, not a struct: encoding/json matches struct fields case-insensitively,
+	// and this must pick the same field as the browser's JSON.parse(...).text.
+	var m map[string]json.RawMessage
 	text := payload
-	if json.Unmarshal([]byte(payload), &m) == nil && m.Text != "" {
-		text = m.Text
+	if json.Unmarshal([]byte(payload), &m) == nil {
+		var t string
+		if json.Unmarshal(m["text"], &t) == nil && t != "" {
+			text = t
+		}
 	}
 	if r := []rune(text); len(r) > 140 {
 		text = string(r[:140]) + "…"

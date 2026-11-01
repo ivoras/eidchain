@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"eidchain/internal/chain"
 )
@@ -388,5 +389,24 @@ func TestOpenReportsDamagedBlocks(t *testing.T) {
 	}
 	if len(re.Skipped) != 2 { // the damaged file, and its child that no longer connects
 		t.Fatalf("skipped: %v", re.Skipped)
+	}
+}
+
+func TestAmbiguousPayloadsAreRefused(t *testing.T) {
+	e := newEnv(t, 3)
+	p, err := chain.NewParams(e.genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{`null`, `[1]`, `{"text":"a","text":"b"}`, `{"text":"I agree","TEXT":"I refuse"}`, `{"a":{"b":1,"B":2}}`, `{"a":[{"x":1,"x":2}]}`} {
+		entry := chain.PayloadEntry{Payload: text, Signature: base64.StdEncoding.EncodeToString(cadesSign(t, e.card, []byte(text)))}
+		if _, err := p.VerifyPayload(entry, time.Now()); err == nil {
+			t.Errorf("%s was accepted", text)
+		}
+	}
+	good := `{"type":"message","text":"a","nested":{"text":"b","list":[{"text":"c"},{"text":"d"}]}}`
+	entry := chain.PayloadEntry{Payload: good, Signature: base64.StdEncoding.EncodeToString(cadesSign(t, e.card, []byte(good)))}
+	if _, err := p.VerifyPayload(entry, time.Now()); err != nil {
+		t.Fatal(err)
 	}
 }

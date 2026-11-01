@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -34,9 +33,8 @@ func (p *Params) VerifyPayload(e PayloadEntry, at time.Time) (*PayloadInfo, erro
 	if !utf8.ValidString(e.Payload) {
 		return nil, errors.New("payload is not valid UTF-8")
 	}
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(e.Payload), &obj); err != nil {
-		return nil, errors.New("payload is not a JSON object")
+	if err := CheckPayloadJSON(e.Payload); err != nil {
+		return nil, err
 	}
 	sig, err := base64.StdEncoding.DecodeString(e.Signature)
 	if err != nil || len(sig) == 0 || len(sig) > 64*1024 {

@@ -141,7 +141,7 @@ A node accepts a block only if all of these hold:
 1. It builds on a known parent, height is parent + 1, and `time` is not before the parent's and not more than 5 minutes in the future.
 2. The signer is an authority **in the parent's authority state** and did not sign any of the previous `floor(N/2)` blocks. The block signature is valid.
 3. `payloadCount`, `rotationCount`, `payloadsRoot` and `rotationsRoot` match the body.
-4. Every payload: valid UTF-8, a JSON object, within the size cap; a valid detached CAdES-B-B signature (RSA PKCS#1 v1.5 or ECDSA with SHA-256/384/512; RSA-PSS is not supported); the signer certificate chains to the genesis trust anchors **judged at the block's timestamp**; non-repudiation key usage if the genesis requires it; no payload that already appears in the block or in its ancestors.
+4. Every payload: valid UTF-8, a JSON object with no duplicate or case-variant keys at any level, within the size cap; a valid detached CAdES-B-B signature (RSA PKCS#1 v1.5 or ECDSA with SHA-256/384/512; RSA-PSS is not supported); the signer certificate chains to the genesis trust anchors **judged at the block's timestamp**; non-repudiation key usage if the genesis requires it; no payload that already appears in the block or in its ancestors.
 5. Every rotation: for this chain, `seq` equals the number of rotations applied so far (no replays), replaces a current authority with a new P-256 key that is not already one, and carries valid approvals from at least `rotationQuorum` distinct keys of the parent's state.
 
 Revocation (OCSP) is deliberately **not** part of these rules, so validation is deterministic and works offline.
