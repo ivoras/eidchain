@@ -634,3 +634,37 @@ func TestClientAddrCannotBeSpoofed(t *testing.T) {
 		}
 	}
 }
+
+func TestPoolSurvivesDamageAndMigrates(t *testing.T) {
+	dir := t.TempDir()
+	item := func(text string) poolItem { return poolItem{Entry: chain.PayloadEntry{Payload: text, Signature: "x" + text}} }
+	old, _ := json.Marshal([]poolItem{item("a")})
+	if err := os.WriteFile(filepath.Join(dir, "pending.json"), old, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := newPool(dir, 10)
+	if err != nil || p.Len() != 1 {
+		t.Fatalf("migration: %v, %d items", err, p.Len())
+	}
+	if _, err := p.Add(item("b")); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := os.OpenFile(filepath.Join(dir, "pending.jsonl"), os.O_WRONLY|os.O_APPEND, 0)
+	f.WriteString(`{"entry":{"payl`) // a crash in the middle of a write
+	f.Close()
+	if _, err := func() (bool, error) { q, err := newPool(dir, 10); return q != nil, err }(); err != nil {
+		t.Fatalf("a torn line stopped the pool loading: %v", err)
+	}
+	q, _ := newPool(dir, 10)
+	if q.Len() != 2 {
+		t.Fatalf("%d items after a torn write", q.Len())
+	}
+	if _, err := q.Add(item("c")); err != nil { // appends after the torn line
+		t.Fatal(err)
+	}
+	q.Remove(map[chain.Hash]bool{item("a").Entry.ID(): true})
+	r, _ := newPool(dir, 10)
+	if r.Len() != 2 {
+		t.Fatalf("%d items after remove", r.Len())
+	}
+}

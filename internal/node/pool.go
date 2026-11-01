@@ -1,8 +1,11 @@
 package node
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,7 +23,10 @@ type poolItem struct {
 }
 
 // Pool holds validated payloads that are not yet in a block. It is persisted to
-// <data>/pending.json so a restart does not lose them.
+// <data>/pending.jsonl, one item per line, so a restart does not lose them. Adding
+// appends a line, which costs the same however full the pool is; only removal
+// rewrites the file. Damage loses the damaged lines, never the node's ability to
+// start, because pending payloads are the one thing here that can be resubmitted.
 type Pool struct {
 	mu    sync.Mutex
 	path  string
@@ -32,7 +38,10 @@ type Pool struct {
 var errPoolFull = errors.New("pending pool is full")
 
 func newPool(dir string, max int) (*Pool, error) {
-	p := &Pool{path: filepath.Join(dir, "pending.json"), max: max, ids: map[chain.Hash]bool{}}
+	p := &Pool{path: filepath.Join(dir, "pending.jsonl"), max: max, ids: map[chain.Hash]bool{}}
+	if err := p.migrate(filepath.Join(dir, "pending.json")); err != nil {
+		return nil, err
+	}
 	raw, err := os.ReadFile(p.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return p, nil
@@ -40,21 +49,72 @@ func newPool(dir string, max int) (*Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(raw, &p.items); err != nil {
-		return nil, err
-	}
-	for _, it := range p.items {
-		p.ids[it.Entry.ID()] = true
+	for i, line := range bytes.Split(raw, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var it poolItem
+		if err := json.Unmarshal(line, &it); err != nil {
+			log.Printf("pending pool: skipping damaged line %d: %v", i+1, err)
+			continue
+		}
+		if id := it.Entry.ID(); !p.ids[id] {
+			p.ids[id] = true
+			p.items = append(p.items, it)
+		}
 	}
 	return p, nil
 }
 
-func (p *Pool) save() {
-	raw, _ := json.Marshal(p.items)
-	tmp := p.path + ".tmp"
-	if os.WriteFile(tmp, raw, 0o644) == nil {
-		os.Rename(tmp, p.path)
+// migrate converts the old pending.json, a single JSON array.
+func (p *Pool) migrate(old string) error {
+	raw, err := os.ReadFile(old)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw, &p.items); err != nil {
+		log.Printf("pending pool: discarding unreadable %s: %v", old, err)
+		p.items = nil
+	}
+	if err := p.rewrite(); err != nil {
+		return err
+	}
+	p.items = nil
+	return os.Remove(old)
+}
+
+// rewrite replaces the file atomically with the current items.
+func (p *Pool) rewrite() error {
+	var buf bytes.Buffer
+	for _, it := range p.items {
+		line, err := json.Marshal(it)
+		if err != nil {
+			return err
+		}
+		buf.Write(line)
+		buf.WriteByte('\n')
+	}
+	return chain.WriteFileAtomic(p.path, buf.Bytes(), 0o644)
+}
+
+func (p *Pool) appendItem(it poolItem) error {
+	line, err := json.Marshal(it)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(p.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	// The leading newline ends any line a crash left half written.
+	if _, err := f.Write(append(append([]byte{'\n'}, line...), '\n')); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 func (p *Pool) Has(id chain.Hash) bool {
@@ -74,9 +134,11 @@ func (p *Pool) Add(it poolItem) (bool, error) {
 	if len(p.items) >= p.max {
 		return false, errPoolFull
 	}
+	if err := p.appendItem(it); err != nil {
+		return false, fmt.Errorf("save pending payload: %w", err)
+	}
 	p.items = append(p.items, it)
 	p.ids[id] = true
-	p.save()
 	return true, nil
 }
 
@@ -84,6 +146,9 @@ func (p *Pool) Add(it poolItem) (bool, error) {
 func (p *Pool) Remove(ids map[chain.Hash]bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if len(ids) == 0 {
+		return
+	}
 	kept := p.items[:0]
 	for _, it := range p.items {
 		if id := it.Entry.ID(); ids[id] {
@@ -92,8 +157,13 @@ func (p *Pool) Remove(ids map[chain.Hash]bool) {
 			kept = append(kept, it)
 		}
 	}
+	if len(kept) == len(p.items) {
+		return
+	}
 	p.items = kept
-	p.save()
+	if err := p.rewrite(); err != nil {
+		log.Printf("pending pool: %v", err) // on restart the stale items are dropped as already on chain
+	}
 }
 
 func (p *Pool) Snapshot() []poolItem {

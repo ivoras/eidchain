@@ -334,7 +334,7 @@ Generates `--authorities` new keys (default 3, or none if you pass existing publ
 data/
   genesis.json       the chain's genesis block
   blocks/<hash>.json every valid block seen, including side branches
-  pending.json       payloads waiting for the next block (survives restarts)
+  pending.jsonl      payloads waiting for the next block (survives restarts; an old pending.json is converted)
   peers.json         peers learned through peer exchange
   keys/*.key         this node's authority private keys (mode 0600)
   config.json        defaults
