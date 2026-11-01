@@ -545,3 +545,19 @@ func TestExplorerHidesThePersonalIDNumber(t *testing.T) {
 		t.Fatalf("subject name: %q", got)
 	}
 }
+
+func TestUnsignedRotationIsRefused(t *testing.T) {
+	n, _, _ := newSoloNode(t)
+	st := n.store.HeadState()
+	k, _ := chain.GenerateKey()
+	pub, _ := chain.EncodePublicKey(&k.PublicKey)
+	body, _ := json.Marshal(chain.Rotation{Change: chain.KeyChange{Type: "replace", Chain: n.store.P.GenesisHash, Seq: st.Seq, Old: st.IDs[0], NewKey: pub}, Signatures: []chain.RotationSig{}})
+	rec := httptest.NewRecorder()
+	n.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/rotations", bytes.NewReader(body)))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("HTTP %d: %s", rec.Code, rec.Body)
+	}
+	if got := n.rots.List(); len(got) != 0 {
+		t.Fatalf("%d unsigned proposal(s) were pooled", len(got))
+	}
+}

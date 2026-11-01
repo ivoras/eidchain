@@ -164,7 +164,8 @@ eidchain rotate create --server http://host:8080 --old a2e51a21 --new-key new.ke
 eidchain rotate sign --key data/keys/authority-2.key rotation.json
 eidchain rotate sign --key data/keys/authority-3.key rotation.json
 
-# Submit it (can also be submitted after each signature; nodes merge approvals).
+# Submit it (can also be submitted after each signature; nodes merge approvals,
+# but a proposal with no approvals at all is refused).
 eidchain rotate submit --server http://host:8080 rotation.json
 ```
 

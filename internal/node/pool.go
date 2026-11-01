@@ -124,9 +124,11 @@ func newRotationPool() *RotationPool {
 func (rp *RotationPool) Add(p *chain.Params, st *chain.State, r chain.Rotation) (status chain.Hash, approvals int, changed bool, err error) {
 	c := r.Change
 	status = c.Hash()
-	// Validate the shape of the change with no approvals required yet.
-	probe := r
-	probe.Signatures = nil
+	// Proposals must carry at least one approval. A proposal nobody signed costs
+	// nothing to make, so accepting one would let anyone fill this pool.
+	if len(r.Signatures) == 0 {
+		return status, 0, false, errors.New("a rotation needs at least one authority's approval")
+	}
 	if c.Type != "replace" || c.Chain != p.GenesisHash || c.Seq != st.Seq || !st.Has(c.Old) {
 		return status, 0, false, errors.New("rotation does not apply to the current chain state (type, chain, seq or old key)")
 	}
