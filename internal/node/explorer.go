@@ -185,6 +185,7 @@ func (n *Node) registerExplorer(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/explorer/authorities", n.handleExplorerAuthorities)
 	mux.HandleFunc("GET /api/v1/explorer/search", n.handleExplorerSearch)
 	mux.HandleFunc("GET /api/v1/explorer/messages", n.handleExplorerMessages)
+	mux.HandleFunc("GET /api/v1/explorer/pending", n.handleExplorerPending)
 }
 
 func (n *Node) handleExplorerBlocks(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +225,21 @@ func (n *Node) handleExplorerMessages(w http.ResponseWriter, r *http.Request) {
 		older = blocks[len(blocks)-1].Header.Height
 	}
 	writeJSON(w, 200, map[string]any{"messages": out, "older": older})
+}
+
+// handleExplorerPending pages through the pending pool, oldest first, which is the
+// order blocks take messages in. next is the offset of the next page; 0 = no more.
+func (n *Node) handleExplorerPending(w http.ResponseWriter, r *http.Request) {
+	const perPage = 50
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	all := n.pendingMessages()
+	offset = max(0, min(offset, len(all)))
+	end := min(offset+perPage, len(all))
+	next := 0
+	if end < len(all) {
+		next = end
+	}
+	writeJSON(w, 200, map[string]any{"messages": all[offset:end], "total": len(all), "offset": offset, "next": next})
 }
 
 // resolveBlock finds a block by decimal height or by 64-hex hash.

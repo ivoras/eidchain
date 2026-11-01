@@ -202,6 +202,28 @@ async function viewMessages(before) {
   );
 }
 
+async function viewPending(offset) {
+  const [p, info] = await Promise.all([api(`explorer/pending?offset=${offset}`), api("info")]);
+  setTicker(info.message);
+  document.title = "eidchain – pending";
+  const wait = !p.total ? "Nothing is waiting for a block."
+    : info.canProduce ? `Next block: ${time(info.nextBlockAt)}, oldest messages first.`
+      : "This node cannot sign the next block itself: it waits for another authority.";
+  show(
+    heading("explorer", "Pending messages.", wait),
+    h("div", { class: "stats" }, stat("pending", p.total), stat("next block", info.pending ? time(info.nextBlockAt) : "–")),
+    p.messages.length
+      ? h("ul", { class: "messages" }, p.messages.map((m) => h("li", {},
+        h("span", { class: "badge pending" }, "pending"), m.ocsp ? [" ", h("span", { class: "badge good" }, "ocsp")] : null,
+        h("div", { class: "text" }, messageText(m.payload)),
+        h("div", { class: "meta" }, `${m.subject} · received ${time(m.time)} · `, txLink(m.id, "details")))))
+      : h("div", { class: "card empty" }, "No messages are pending."),
+    h("div", { class: "pager" },
+      offset ? link("#/pending", "First page", { class: "btn" }) : null,
+      p.next ? link(`#/pending/${p.next}`, "More", { class: "btn" }) : null),
+  );
+}
+
 async function viewAuthorities(highlight) {
   const a = await api("explorer/authorities");
   a.history ??= []; a.pending ??= []; a.canSign ??= [];
@@ -273,6 +295,7 @@ async function route() {
       case "block": return await viewBlock(arg);
       case "tx": return await viewTx(arg);
       case "messages": return await viewMessages(Number(arg) || 0);
+      case "pending": return await viewPending(Number(arg) || 0);
       case "authorities": return await viewAuthorities();
       case "authority": return await viewAuthorities(arg);
       case "node": return await viewNode();

@@ -741,3 +741,39 @@ func TestCheckCert(t *testing.T) {
 		t.Errorf("an unknown issuer: %v", r)
 	}
 }
+
+func TestExplorerPendingPages(t *testing.T) {
+	n, _, _ := newSoloNode(t)
+	for i := 0; i < 60; i++ {
+		e := chain.PayloadEntry{Payload: fmt.Sprintf(`{"n":%d}`, i), Signature: "x"}
+		if _, err := n.pool.Add(poolItem{Entry: e, Subject: "PERA", Added: int64(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type page struct {
+		Messages []Message `json:"messages"`
+		Total    int       `json:"total"`
+		Next     int       `json:"next"`
+	}
+	read := func(q string) page {
+		var p page
+		if err := json.Unmarshal(get(n.Handler(), "/api/v1/explorer/pending"+q).Body.Bytes(), &p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	first := read("")
+	if first.Total != 60 || len(first.Messages) != 50 || first.Next != 50 || first.Messages[0].Payload != `{"n":0}` {
+		t.Fatalf("first page: %d of %d, next %d", len(first.Messages), first.Total, first.Next)
+	}
+	last := read("?offset=50")
+	if len(last.Messages) != 10 || last.Next != 0 || last.Messages[9].Status != "pending" {
+		t.Fatalf("last page: %d, next %d", len(last.Messages), last.Next)
+	}
+	if beyond := read("?offset=999"); len(beyond.Messages) != 0 || beyond.Next != 0 {
+		t.Fatalf("beyond the end: %d", len(beyond.Messages))
+	}
+	if bad := read("?offset=-5"); len(bad.Messages) != 50 {
+		t.Fatalf("negative offset: %d", len(bad.Messages))
+	}
+}
