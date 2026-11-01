@@ -359,7 +359,7 @@ All under `/api/v1`, JSON, CORS open. There is no authentication: every write ne
 | `GET /rotations`, `POST /rotations` | Pending rotation proposals; submit or add approvals |
 | `GET /explorer/blocks?before=H&limit=N` | Block summaries, newest first, with a cursor for older pages |
 | `GET /explorer/block/{height or hash}` | A block with its messages, rotations, neighbours and confirmations |
-| `GET /explorer/tx/{id}` | A message: payload, signer certificate, CAdES and OCSP details, and where it is (or that it is pending) |
+| `GET /explorer/tx/{id}` | A message (its id is a hash of the payload and the signer's certificate): payload, signer certificate, CAdES and OCSP details, and where it is (or that it is pending) |
 | `GET /explorer/authorities` | Current keys, rotation history, pending proposals and which keys this node holds |
 | `GET /explorer/search?q=` | Resolves a height, block hash, message id or authority key id |
 

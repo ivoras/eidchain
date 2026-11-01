@@ -23,6 +23,7 @@ const (
 	genesisDomain  = "eidchain/genesis/v1\n"
 	blockDomain    = "eidchain/block/v1\n"
 	rotationDomain = "eidchain/rotation/v1\n"
+	payloadDomain  = "eidchain/payload/v1\n"
 )
 
 // Hash is a SHA-256 digest, rendered as lowercase hex in JSON.
@@ -138,8 +139,26 @@ type PayloadEntry struct {
 	OCSP      string `json:"ocsp,omitempty"` // base64 DER OCSP response; committed to but not a validity rule
 }
 
-// ID is the SHA-256 of the payload bytes; used for de-duplication.
-func (e PayloadEntry) ID() Hash { return sha256.Sum256([]byte(e.Payload)) }
+// ID identifies a record: these bytes, signed by this certificate. Two people may
+// sign the same text and get separate records. The signature bytes are left out
+// on purpose: anyone can vary those (ECDSA values, unsigned attributes), which
+// would let an old record be replayed under a new ID, as would the OCSP response.
+func (e PayloadEntry) ID() Hash {
+	var signer []byte
+	if sig, err := base64.StdEncoding.DecodeString(e.Signature); err == nil {
+		if h, err := signerCertHash(sig); err == nil {
+			signer = h[:]
+		}
+	}
+	if signer == nil { // unparsable: it will fail validation, so any stable value does
+		signer = []byte(e.Signature)
+	}
+	var buf bytes.Buffer
+	buf.WriteString(payloadDomain)
+	putChunk(&buf, []byte(e.Payload))
+	putChunk(&buf, signer)
+	return sha256.Sum256(buf.Bytes())
+}
 
 // Block is a signed set of payloads.
 type Block struct {

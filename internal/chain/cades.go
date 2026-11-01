@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"errors"
@@ -93,37 +94,34 @@ func algHash(rv asn1.RawValue) (crypto.Hash, error) {
 	return h, nil
 }
 
-// VerifyDetached checks a detached CAdES (CMS SignedData) signature over
-// content: structure, the signer's signature over the signed attributes, the
-// message digest, and the ESS signing-certificate-v2 binding that CAdES-B-B
-// requires. It does not judge the certificate; see TrustStore.Verify.
-func VerifyDetached(sig, content []byte) (*Signature, error) {
+// parseSignedData walks a CMS ContentInfo down to its certificates and its one SignerInfo.
+func parseSignedData(sig []byte) ([]*x509.Certificate, []asn1.RawValue, error) {
 	ci, rest, err := tlv(sig)
 	if err != nil || len(rest) != 0 || !isUniversal(ci, asn1.TagSequence) {
-		return nil, errors.New("signature is not a single DER sequence")
+		return nil, nil, errors.New("signature is not a single DER sequence")
 	}
 	ck, err := kids(ci)
 	if err != nil || len(ck) != 2 {
-		return nil, errors.New("malformed ContentInfo")
+		return nil, nil, errors.New("malformed ContentInfo")
 	}
 	if o, err := oidOf(ck[0]); err != nil || !o.Equal(oidSignedData) {
-		return nil, errors.New("not a CMS SignedData")
+		return nil, nil, errors.New("not a CMS SignedData")
 	}
 	if !isContext(ck[1], 0) {
-		return nil, errors.New("malformed ContentInfo content")
+		return nil, nil, errors.New("malformed ContentInfo content")
 	}
 	sd, _, err := tlv(ck[1].Bytes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sk, err := kids(sd)
 	if err != nil || len(sk) < 4 {
-		return nil, errors.New("malformed SignedData")
+		return nil, nil, errors.New("malformed SignedData")
 	}
 	// sk[0]=version, sk[1]=digestAlgorithms, sk[2]=encapContentInfo
 	ek, err := kids(sk[2])
 	if err != nil || len(ek) != 1 {
-		return nil, errors.New("signature must be detached (no embedded content)")
+		return nil, nil, errors.New("signature must be detached (no embedded content)")
 	}
 	i := 3
 	var certs []*x509.Certificate
@@ -133,7 +131,7 @@ func VerifyDetached(sig, content []byte) (*Signature, error) {
 		}
 		cs, err := kids(sk[i])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, c := range cs {
 			if !isUniversal(c, asn1.TagSequence) {
@@ -141,21 +139,48 @@ func VerifyDetached(sig, content []byte) (*Signature, error) {
 			}
 			cert, err := x509.ParseCertificate(c.FullBytes)
 			if err != nil {
-				return nil, fmt.Errorf("embedded certificate: %w", err)
+				return nil, nil, fmt.Errorf("embedded certificate: %w", err)
 			}
 			certs = append(certs, cert)
 		}
 	}
 	if i >= len(sk) || !isUniversal(sk[i], asn1.TagSet) {
-		return nil, errors.New("missing signerInfos")
+		return nil, nil, errors.New("missing signerInfos")
 	}
 	sis, err := kids(sk[i])
 	if err != nil || len(sis) != 1 {
-		return nil, errors.New("exactly one signer is required")
+		return nil, nil, errors.New("exactly one signer is required")
 	}
 	si, err := kids(sis[0])
 	if err != nil || len(si) < 5 {
-		return nil, errors.New("malformed SignerInfo")
+		return nil, nil, errors.New("malformed SignerInfo")
+	}
+	return certs, si, nil
+}
+
+// signerCertHash names who claims to have made sig, without verifying anything:
+// the SHA-256 of the signer's certificate. It serves as an identity for records,
+// because unlike the signature bytes it cannot be varied by a third party.
+func signerCertHash(sig []byte) ([32]byte, error) {
+	certs, si, err := parseSignedData(sig)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	cert, err := findSigner(si[1], certs)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(cert.Raw), nil
+}
+
+// VerifyDetached checks a detached CAdES (CMS SignedData) signature over
+// content: structure, the signer's signature over the signed attributes, the
+// message digest, and the ESS signing-certificate-v2 binding that CAdES-B-B
+// requires. It does not judge the certificate; see TrustStore.Verify.
+func VerifyDetached(sig, content []byte) (*Signature, error) {
+	certs, si, err := parseSignedData(sig)
+	if err != nil {
+		return nil, err
 	}
 	// si[0]=version si[1]=sid si[2]=digestAlg [si[3]=signedAttrs] sigAlg signature
 	hashFn, err := algHash(si[2])

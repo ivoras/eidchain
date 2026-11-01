@@ -127,7 +127,7 @@ async function run() {
     const body = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
     $("text").value = "";
-    setStatus(body.status === "known" ? "That exact message is already on the chain." : "Accepted: it will be in the next block.", "ok");
+    setStatus(body.status === "known" ? "You have already submitted that exact message." : "Accepted: it will be in the next block.", "ok");
     refresh();
   } catch (e) {
     setStatus(e instanceof WebEidError ? (ERRORS[e.code] ?? `${e.code}: ${e.message}`) : e.message, "error");

@@ -410,3 +410,21 @@ func TestAmbiguousPayloadsAreRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRecordIdentity(t *testing.T) {
+	e := newEnv(t, 3)
+	other := e.pki.Leaf(t, "ANA ANIC", x509.KeyUsageContentCommitment, true)
+	ec := e.pki.Leaf(t, "IVA IVIC", x509.KeyUsageContentCommitment, true)
+	same := "co-signed"
+	if e.payloadAs(e.card, same).ID() == e.payloadAs(other, same).ID() {
+		t.Error("two signers of the same text share a record ID")
+	}
+	// ECDSA signatures differ each time, but it is still the same record.
+	a, b := e.payloadAs(ec, same), e.payloadAs(ec, same)
+	if a.Signature == b.Signature {
+		t.Fatal("expected two different ECDSA signatures")
+	}
+	if a.ID() != b.ID() {
+		t.Error("re-signing the same text gave a new record ID")
+	}
+}
