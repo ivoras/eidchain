@@ -1,0 +1,16 @@
+# Built binaries
+/bin/
+/eidchain
+
+# Runtime state: chain data, authority private keys, node config.
+# Never commit private keys. data/.gitignore is kept so the directory exists.
+/data/*
+!/data/.gitignore
+*.key
+
+# Local scratch and editor files
+*.test
+*.out
+.DS_Store
+.idea/
+.vscode/

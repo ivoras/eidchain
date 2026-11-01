@@ -1,0 +1,86 @@
+package node
+
+import (
+	"context"
+	"errors"
+	"log"
+	"time"
+
+	"eidchain/internal/chain"
+	"eidchain/internal/remote"
+)
+
+// fanout runs fn against every peer concurrently.
+func (n *Node) fanout(what string, fn func(context.Context, *remote.Client) error) {
+	for _, p := range n.peers {
+		go func(p *remote.Client) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := fn(ctx, p); err != nil {
+				log.Printf("gossip %s to %s: %v", what, p.Base, err)
+			}
+		}(p)
+	}
+}
+
+func (n *Node) broadcastBlock(b *chain.Block) {
+	n.fanout("block", func(ctx context.Context, p *remote.Client) error {
+		_, err := p.PostBlock(ctx, b)
+		return err
+	})
+}
+
+func (n *Node) broadcastPayload(e chain.PayloadEntry) {
+	n.fanout("payload", func(ctx context.Context, p *remote.Client) error {
+		_, err := p.PostPayload(ctx, e)
+		return err
+	})
+}
+
+func (n *Node) broadcastRotation(r chain.Rotation) {
+	n.fanout("rotation", func(ctx context.Context, p *remote.Client) error {
+		_, err := p.PostRotation(ctx, r)
+		return err
+	})
+}
+
+// syncLoop pulls from every peer at startup, periodically, and when a pushed
+// block arrives whose parent we do not have.
+func (n *Node) syncLoop(ctx context.Context) {
+	if len(n.peers) == 0 {
+		return
+	}
+	t := time.NewTicker(n.opt.SyncInterval)
+	defer t.Stop()
+	n.syncAll(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		case <-n.kick:
+		}
+		n.syncAll(ctx)
+	}
+}
+
+func (n *Node) syncAll(ctx context.Context) {
+	for _, p := range n.peers {
+		sctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		res, err := remote.Sync(sctx, n.store, p, nil)
+		cancel()
+		switch {
+		case err != nil && !errors.Is(err, context.Canceled):
+			log.Printf("sync from %s: %v", p.Base, err)
+		case err == nil && res.Fetched > 0:
+			log.Printf("sync from %s: fetched %d block(s), now at height %d", p.Base, res.Fetched, res.Height)
+		}
+	}
+}
+
+func (n *Node) kickSync() {
+	select {
+	case n.kick <- struct{}{}:
+	default:
+	}
+}

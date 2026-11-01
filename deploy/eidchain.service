@@ -1,0 +1,47 @@
+# systemd unit for an eidchain node (the chain API and example web app).
+#
+# Install (see deploy/install.sh, which does all of this):
+#   1. Build the binary:   go build -o bin/eidchain ./cmd/eidchain
+#   2. Create the chain once:  ./bin/eidchain genesis --message "..."
+#   3. sudo cp deploy/eidchain.service /etc/systemd/system/
+#      sudo systemctl daemon-reload && sudo systemctl enable --now eidchain
+#   Logs: journalctl -u eidchain -f
+#
+# The node listens on loopback only; nginx (deploy/nginx-eidchain.conf) proxies
+# https://eidchain.ivoras.net/chain/ to it.
+
+[Unit]
+Description=eidchain node (proof-of-authority chain of eID-signed records)
+Documentation=file:///srv/eidchain/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ivoras
+Group=ivoras
+WorkingDirectory=/srv/eidchain
+ExecStart=/srv/eidchain/bin/eidchain node --data /srv/eidchain/data --listen 127.0.0.1:8095
+Restart=on-failure
+RestartSec=3
+
+# Hardening: the node needs the network and its own data directory, nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/eidchain/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eidchain – signed messages</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<h1>eidchain</h1>
+<p class="lead" id="chain">Loading…</p>
+<p id="stats" class="stats"></p>
+
+<section>
+  <h2>Add a message</h2>
+  <p>Your message is signed with your eID card in this browser (PIN2 prompt) and added to the next block.</p>
+  <label for="text">Message</label>
+  <textarea id="text" rows="4" placeholder="Text to put on the chain"></textarea>
+  <div class="row">
+    <span id="count" class="stats"></span>
+    <button type="button" id="submit">Sign with eID card and submit</button>
+  </div>
+  <p id="status" role="status" aria-live="polite"></p>
+  <details id="diagnostics">
+    <summary>Diagnostics (Web eID messages)</summary>
+    <pre id="trace"></pre>
+  </details>
+</section>
+
+<section>
+  <h2>Messages</h2>
+  <ul id="messages" class="messages"></ul>
+</section>
+
+<p><small>Needs the <a href="https://web-eid.eu">Web eID</a> extension and app. Web eID only works on HTTPS pages or on <code>localhost</code>.</small></p>
+<script type="module" src="app.js"></script>
+</body>
+</html>

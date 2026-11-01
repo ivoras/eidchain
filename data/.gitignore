@@ -1,0 +1,4 @@
+# Everything in the data directory is runtime state: the chain, authority
+# private keys and the node config. Keep the directory, ignore its contents.
+*
+!.gitignore

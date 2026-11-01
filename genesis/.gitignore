@@ -1,0 +1,2 @@
+# Genesis files are public and may be committed. Private keys must never live here.
+*.key

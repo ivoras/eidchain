@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eID signer</title>
+<link rel="stylesheet" href="signer.css">
+</head>
+<body>
+<h1>Sign a document with your eID card</h1>
+<p class="lead">The document is hashed in your browser and never uploaded. Only the hash goes to your card.</p>
+
+<p>
+  <label for="file">Document</label><br>
+  <input type="file" id="file">
+</p>
+<fieldset>
+  <legend>Signature type</legend>
+  <label><input type="checkbox" id="fmt-cades" checked> CAdES-B-B (<code>.p7s</code>, also PEM, Base64 and <code>.p7m</code>)</label><br>
+  <label><input type="checkbox" id="fmt-plain"> Plain signature (<code>.sig</code>) – asks for the PIN a second time</label>
+</fieldset>
+<button type="button" id="sign">Sign with eID card</button>
+
+<p id="status" role="status" aria-live="polite"></p>
+<div id="signer" hidden></div>
+
+<details id="diagnostics">
+  <summary>Diagnostics (Web eID messages)</summary>
+  <pre id="trace"></pre>
+</details>
+
+<section id="result" hidden>
+  <h2>Result</h2>
+  <ul id="links"></ul>
+  <p>Verify with OpenSSL (<a href="/hr-eid-ca.pem">hr-eid-ca.pem</a> holds the AKDCA Root and HRIDCA certificates):</p>
+  <pre id="verify-cmd"></pre>
+  <p><small>CAdES-B-B is the baseline signature level: it has the signing time from your browser's clock, not a trusted timestamp, and no embedded revocation data, so it cannot prove when it was made. Whether it counts as a qualified signature depends on the card's certificate and on a validation service.</small></p>
+</section>
+
+<p><small>Needs the <a href="https://web-eid.eu">Web eID</a> browser extension and app, plus the Certilia middleware for Croatian cards. <a href="/">Home</a></small></p>
+
+<script type="module" src="signer.js"></script>
+</body>
+</html>
