@@ -616,3 +616,21 @@ func TestBlocksStayWithinTheSizeLimit(t *testing.T) {
 		t.Fatal("nothing was left for the next block")
 	}
 }
+
+func TestClientAddrCannotBeSpoofed(t *testing.T) {
+	cases := []struct{ remote, xff, want string }{
+		{"203.0.113.9:1234", "1.2.3.4", "203.0.113.9"},              // not behind our proxy: the header is ignored
+		{"127.0.0.1:1234", "1.2.3.4, 198.51.100.7", "198.51.100.7"}, // nginx appends the real client
+		{"127.0.0.1:1234", "", "127.0.0.1"},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = c.remote
+		if c.xff != "" {
+			r.Header.Set("X-Forwarded-For", c.xff)
+		}
+		if got := clientAddr(r); got != c.want {
+			t.Errorf("%+v: got %s", c, got)
+		}
+	}
+}

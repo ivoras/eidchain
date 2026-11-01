@@ -82,15 +82,18 @@ func (n *Node) Handler() http.Handler {
 	return accessLog(cors(mux))
 }
 
-// clientAddr is the caller's address, honouring the reverse proxy's header.
+// clientAddr is the caller's address. X-Forwarded-For is only believed from a
+// reverse proxy on this machine, and only its last entry: that is the one nginx
+// added itself, while everything before it is whatever the client sent.
 func clientAddr(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		first, _, _ := strings.Cut(xff, ",")
-		return strings.TrimSpace(first)
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if ip := net.ParseIP(host); xff != "" && ip != nil && ip.IsLoopback() {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[len(parts)-1])
 	}
 	return host
 }
