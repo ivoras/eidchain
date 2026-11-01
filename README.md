@@ -21,6 +21,7 @@ The repository also holds the website that runs at `eidchain.ivoras.net` (`www/`
 - **OCSP at submission.** When a payload is submitted, the node asks the signer certificate's OCSP responder and fails closed. The signed OCSP response is stored in the block next to the payload so anyone can audit it later (it is committed to by the block hash but is *not* a block validity rule, because revocation answers change over time).
 - **Gossip and pull.** Nodes push new blocks, payloads and rotation approvals to configured peers and also pull from them periodically. `eidchain pull` downloads a chain from a running node with `docker pull` semantics: you name the chain by its genesis hash, everything is verified locally from the genesis, and a repeated pull fetches only what is new.
 - **Block production every 10 minutes.** If any payloads are waiting, an authority node cuts a block on every 10-minute wall-clock boundary, regardless of how few payloads there are. A block holds at most 8 MiB; anything beyond that waits for the next one.
+- **Block timestamps.** A node with signing keys gets an RFC 3161 timestamp on every block hash from Sectigo and FreeTSA, as outside evidence of when the block existed. Tokens are verified, gossiped and synced, and nothing in the chain depends on them.
 - **Example web app and explorer.** Anyone can type a message, sign it with their eID card in the browser, and add it to the next block. No accounts. A built-in explorer shows blocks, messages (with the signer's certificate and OCSP result), authority keys and rotations, with search, behind a shared nav bar.
 - **Strict JSON.** Duplicate keys and case-variant field names are refused everywhere, so a document cannot be read two ways.
 - **PII-free logs.** Success paths never log signer names, certificate serials or client addresses; error handlers do, because that is what debugging needs.
@@ -152,6 +153,18 @@ The canonical chain is the highest one; at equal height the lowest block hash wi
 
 Height costs nothing in proof of authority, so a running node also refuses to reorganise past two limits: it will not replace more than 64 blocks (`MaxReorgDepth`), and it will not undo a key rotation with 6 or more blocks after it (`RotationFinality`). The second limit is what makes a rotation final: until then, a quorum of the old keys could still fork from before it. These limits are local judgement rather than consensus rules. A node that was partitioned for longer than this refuses the other side's chain and logs `reorganisation refused`; repair it by pulling into a fresh directory. A node syncing from nothing has no chain to protect, so check the head against a source you trust.
 
+### Block timestamps
+
+A block's `time` comes from its signer's clock, so it proves nothing by itself. A timestamp does: an outside authority signs the block hash and the time it saw it, which proves the block, and through its Merkle roots every message in it, existed by then. It sets a latest possible time for a message, not the moment it was signed.
+
+- **Who asks.** A node with signing keys requests a token from each authority for every canonical block that lacks one, including older blocks when it starts (a late token only proves a later time). It leaves at least 15 seconds between requests to each service, as Sectigo asks, and backs off for 5 minutes after a failure. `--no-timestamp` turns this off. Followers do not contact the authorities.
+- **What leaves the node.** Only the block hash. The services see neither messages nor names.
+- **Where tokens live.** Beside the block, in `<data>/timestamps/`, because a token signs the block hash and so cannot be part of it. They are not consensus data: blocks are valid without them, and an outage cannot stop the chain.
+- **Why they can be shared freely.** Every node verifies a token before keeping it: the right hash, the signature, the ESS attribute naming the signing certificate, and a chain to an embedded root with the time-stamping usage, judged at the time the token states. Revocation of the authority's certificate is not checked. Nodes keep one token per authority per block, the earliest they have seen. They gossip tokens, fetch the ones they lack when they sync, and `pull` downloads them too.
+- **Checking.** `eidchain verify` fails if a stored token does not verify, and reports how many blocks have one. The explorer's block page shows them, and `GET /api/v1/timestamps` returns the tokens as base64 DER. `openssl ts -verify` accepts FreeTSA's tokens, but OpenSSL 3.0.13 refuses Sectigo's with `ess cert id not found`, even though the first ESS entry names the signer and `eidchain verify` accepts them.
+
+Neither service issues qualified eIDAS timestamps, so these have no special legal standing, and both are free public services with no service guarantee. The authorities' roots are pinned in `internal/tsa/roots/`.
+
 ### Key rotation
 
 A rotation replaces authority key `old` with `newKey`. Signing it works like a multi-signature file:
@@ -223,6 +236,7 @@ Flags may come before or after positional arguments. `-h` lists a command's flag
 | `--ocsp` | `required` | `required` (fail closed) or `skip` (testing only) |
 | `--keys` | `<data>/keys` | Authority private keys (`*.key`, PKCS#8 PEM). A node may hold several, one, or none |
 | `--no-web` | off | Do not serve the web app |
+| `--no-timestamp` | off | Do not request [block timestamps](#block-timestamps) |
 | `--advertise URL` | none | This node's public base URL (for example `https://host/chain`). Announced to peers so they gossip with it too |
 | `--no-peer-exchange` | off | Use only the peers given with `--peer` |
 | `--peers-allow-private` | off | Allow learned peers on private or loopback addresses (closed networks, testing) |
@@ -324,6 +338,7 @@ Commands that talk to a node use `--server URL`, else the first peer in `config.
   "keysDir": "keys",
   "advertise": "https://my-node.example/chain",
   "peerExchange": true,
+  "timestamp": true,
   "trustCAs": ["builtin:hr"]
 }
 ```
@@ -338,6 +353,7 @@ data/
   blocks/<hash>.json every valid block seen, including side branches
   pending.jsonl      payloads waiting for the next block (survives restarts)
   peers.json         peers learned through peer exchange
+  timestamps/<hash>.json  verified RFC 3161 tokens for a block
   keys/*.key         this node's authority private keys (mode 0600)
   config.json        defaults
 ```
@@ -359,6 +375,7 @@ All under `/api/v1`, JSON, CORS open. There is no authentication: every write ne
 | `POST /payloads` | Submit `{"payload": "...", "signature": "<base64 CAdES>"}`. Checks the signature, the certificate chain, the payload's `chain` field and OCSP; 422 on rejection, 503 if the OCSP responder is unreachable or the pool is full (safe to retry) |
 | `POST /check-cert` | Whether `{"certificate": "<base64 DER>"}` could sign here, so the web app can say so before the PIN |
 | `GET /messages?limit=N` | Pending and recent confirmed records with their signer, for the web app (at most `N`, pending first) |
+| `GET /timestamps?from=H`, `POST /timestamps` | Timestamp tokens for 200 heights from `H`, with a cursor; offer tokens for a block (`{"block": "...", "tokens": ["<base64>"]}`), which are verified first |
 | `GET /authorities` | Current authority key IDs, rotation sequence and quorum |
 | `GET /peers`, `POST /peers` | The peers this node shares (itself, public and healthy ones); announce a node's own address (`{"url": "..."}`), which is verified before it is added |
 | `GET /rotations`, `POST /rotations` | Pending rotation proposals; submit or add approvals |
@@ -408,7 +425,7 @@ go vet ./...
 go test -race ./...
 ```
 
-The tests cover pulling (including finding the fork point of a diverged chain and never moving backwards), CAdES verification (including signatures produced by the browser-side JavaScript signer), the consensus rules, forks and reorgs, key rotation (quorum, replay, retired keys), reopening and re-verifying a stored chain, peer exchange (discovery, verification, address safety, limits) and a multi-node run over real HTTP with gossip, pull, rotation and the embedded web app.
+The tests cover pulling (including finding the fork point of a diverged chain and never moving backwards), CAdES verification (including signatures produced by the browser-side JavaScript signer), the consensus rules, forks and reorgs, key rotation (quorum, replay, retired keys), reopening and re-verifying a stored chain, peer exchange (discovery, verification, address safety, limits), timestamping (including real Sectigo and FreeTSA tokens, and authority outages) and a multi-node run over real HTTP with gossip, pull, rotation and the embedded web app.
 
 ```
 cmd/eidchain/        CLI
@@ -416,6 +433,7 @@ deploy/              systemd unit, nginx config, install script
 internal/chain/      data model, hashing, CAdES verification, validation, store, fork choice
 internal/node/       HTTP API, pools, block production, gossip, peer exchange, sync loop
 internal/remote/     node API client and chain synchronisation (used by pull and by nodes)
+internal/tsa/        RFC 3161 client and verifier, stored tokens, embedded authority roots
 internal/webapp/     embedded example web app and explorer (HTML, JS, CSS)
 internal/hrca/       embedded AKDCA Root, HRIDCA and HRIDCA 2025 certificates
 internal/config/     config.json
@@ -445,7 +463,7 @@ If a key ever does get pushed, treat it as compromised: rotate it (see [Key rota
 
 - **Personal data is permanent.** Every signature embeds the signer's certificate, with their name and, on Croatian cards, their OIB. Blocks are public and immutable, which sits badly with GDPR erasure rights. Get legal advice before running this with real users; storing certificates off-chain would need a new block format.
 - **Not tested with a real eID card, real OCSP responder or a real HRIDCA-issued certificate.** The CAdES verifier is tested against signatures from the browser-side signer, and the CA chain code against a test hierarchy, but the full path with a live Croatian card has not been run. Expect to adjust something (for example certificate extensions that Go's X.509 verifier treats strictly).
-- **Time is whatever the signer's clock says.** There are no trusted timestamps; block times are checked only against the parent and a 5-minute future bound.
+- **Block `time` is whatever the signer's clock says.** It is checked only against the parent and a 5-minute future bound. [Block timestamps](#block-timestamps) give independent evidence, but fork choice and validation do not use them.
 - **Weak finality.** Running nodes limit reorganisations (see [Fork choice](#fork-choice)), but nothing proves to a new node which of two branches came first, and blocks have no minimum spacing.
 - **Key separation is up to you.** The majority rule means nothing if one machine holds a majority of the keys, as the PoC deployment does.
 - **The `chain` field is checked at submission, not in blocks,** like OCSP: an authority that bypasses the API can still include a record without it.

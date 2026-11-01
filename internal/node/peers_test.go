@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"eidchain/internal/remote"
+	"eidchain/internal/tsa"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,17 +28,19 @@ type peerWorld struct {
 	g    *chain.Genesis
 	pki  *testpki.PKI
 	card testpki.Leaf
+	key  chain.Signer
 }
 
 func newPeerWorld(t *testing.T, message string) *peerWorld {
 	pki := testpki.New(t)
 	k, _ := chain.GenerateKey()
+	id, _ := chain.KeyID(&k.PublicKey)
 	pub, _ := chain.EncodePublicKey(&k.PublicKey)
 	g, err := chain.NewGenesis(message, []chain.Authority{{PublicKey: pub}}, []string{pki.RootPEM, pki.InterPEM}, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &peerWorld{t: t, g: g, pki: pki, card: pki.Leaf(t, "PERA PERIC", x509.KeyUsageContentCommitment, false)}
+	return &peerWorld{t: t, g: g, pki: pki, card: pki.Leaf(t, "PERA PERIC", x509.KeyUsageContentCommitment, false), key: chain.Signer{ID: id, Key: k}}
 }
 
 // start creates n nodes whose HTTP servers are up before the nodes are configured,
@@ -348,4 +352,104 @@ func TestSlowPeerDoesNotDelayOthers(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+func TestBlocksGetTimestampedAndTokensSpread(t *testing.T) {
+	w := newPeerWorld(t, "stamps")
+	fake := testpki.NewTSA(t)
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	nodes, srvs := w.start(3, map[int][]int{0: {1}}, func(i int, o *Options) {
+		o.TSAs = []tsa.Authority{{Root: fake.RootName(), URL: srv.URL}}
+		o.TSARoots = fake.Roots()
+		o.TimestampPoll = 10 * time.Millisecond
+	})
+	a, b, late := nodes[0], nodes[1], nodes[2]
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p := record(w.g.Hash(), "stamp me")
+	blockOn(t, w, a, chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, w.card, []byte(p)))})
+	hash, _ := a.store.Head()
+	for _, n := range []*Node{b, late} {
+		if _, err := n.store.AddBlock(mustBlock(t, a, hash)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	go a.stampLoop(ctx, a.opt.TSAs[0])
+	waitFor(t, "the token to reach the peer", func() bool { return len(b.stamps.List(hash)) == 1 })
+
+	// A node that missed the gossip fetches it.
+	if n, err := remote.SyncStamps(ctx, late.store, late.stamps, remote.New(srvs[1].URL)); n != 1 || err != nil {
+		t.Fatalf("sync: %d, %v", n, err)
+	}
+	if rec := get(a.Handler(), "/api/v1/explorer/block/1"); !strings.Contains(rec.Body.String(), fake.RootName()) {
+		t.Errorf("the explorer does not show the timestamp: %s", rec.Body)
+	}
+
+	// A token for another block is refused, and so is one for an unknown block.
+	wrong := fake.Token(t, chain.Hash{1}, time.Now())
+	if rec := post(a.Handler(), "/api/v1/timestamps", jsonBody(t, remote.BlockStamps{Block: hash, Tokens: [][]byte{wrong}})); rec.Code != 422 {
+		t.Errorf("wrong token: HTTP %d", rec.Code)
+	}
+	if rec := post(a.Handler(), "/api/v1/timestamps", jsonBody(t, remote.BlockStamps{Block: chain.Hash{1}, Tokens: [][]byte{wrong}})); rec.Code != 404 {
+		t.Errorf("unknown block: HTTP %d", rec.Code)
+	}
+}
+
+// A timestamp service being down must never get in the way of the chain.
+func TestAuthorityOutageDoesNotStopTheChain(t *testing.T) {
+	w := newPeerWorld(t, "outage")
+	fake := testpki.NewTSA(t)
+	var up atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if !up.Load() {
+			http.Error(rw, "down", 503)
+			return
+		}
+		fake.ServeHTTP(rw, r)
+	}))
+	defer srv.Close()
+	nodes, _ := w.start(1, nil, func(i int, o *Options) {
+		o.TSAs = []tsa.Authority{{Root: fake.RootName(), URL: srv.URL}}
+		o.TSARoots = fake.Roots()
+		o.TimestampPoll = 5 * time.Millisecond
+	})
+	n := nodes[0]
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go n.stampLoop(ctx, n.opt.TSAs[0])
+	p := record(w.g.Hash(), "during the outage")
+	blockOn(t, w, n, chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, w.card, []byte(p)))})
+	hash, height := n.store.Head()
+	if height != 1 {
+		t.Fatalf("the block was not made: height %d", height)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if len(n.stamps.List(hash)) != 0 {
+		t.Fatal("a token appeared during the outage")
+	}
+	up.Store(true)
+	waitFor(t, "the token after the outage", func() bool { return len(n.stamps.List(hash)) == 1 })
+}
+
+// blockOn makes a block on top of n's head, signed by the world's key.
+func blockOn(t *testing.T, w *peerWorld, n *Node, e chain.PayloadEntry) {
+	t.Helper()
+	head, h := n.store.Head()
+	b := &chain.Block{Header: chain.Header{Height: h + 1, Prev: head, Time: time.Now().Unix()}, Payloads: []chain.PayloadEntry{e}}
+	if err := chain.SignBlock(w.key, b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.store.AddBlock(b); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustBlock(t *testing.T, n *Node, h chain.Hash) *chain.Block {
+	t.Helper()
+	b, ok := n.store.Block(h)
+	if !ok {
+		t.Fatal("no such block")
+	}
+	return b
 }

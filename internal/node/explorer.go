@@ -46,6 +46,16 @@ type blockView struct {
 	Confirmations uint64           `json:"confirmations"`
 	Transactions  []txSummary      `json:"transactions"`
 	Rotations_    []chain.Rotation `json:"rotationList"`
+	Timestamps    []stampView      `json:"timestamps"`
+}
+
+// stampView is a verified timestamp. Token is the base64 RFC 3161 token, for
+// anyone who wants to check it themselves.
+type stampView struct {
+	Authority string `json:"authority"`
+	Signer    string `json:"signer"`
+	Time      int64  `json:"time"`
+	Token     []byte `json:"token"`
 }
 
 type certView struct {
@@ -239,6 +249,10 @@ func (n *Node) handleExplorerBlock(w http.ResponseWriter, r *http.Request) {
 		Transactions: n.txSummaries(b), Rotations_: b.Rotations}
 	if v.Rotations_ == nil {
 		v.Rotations_ = []chain.Rotation{}
+	}
+	v.Timestamps = []stampView{}
+	for _, s := range n.stamps.List(h) {
+		v.Timestamps = append(v.Timestamps, stampView{s.Info.Authority, s.Info.Signer, s.Info.Time.Unix(), s.Token})
 	}
 	prev := b.Header.Prev
 	if b.Header.Height == 1 {

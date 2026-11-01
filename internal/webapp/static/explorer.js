@@ -111,6 +111,9 @@ async function viewBlock(ref) {
       ["rotations", `${hd.rotationCount}${hd.rotationCount ? ` (root ${short(hd.rotationsRoot)})` : ""}`],
       ["size", bytes(b.size)],
       ["signature", h("span", { class: "hash", title: "ECDSA over the block hash" }, short(b.signature, 20, 8))],
+      ["timestamps", b.timestamps.length
+        ? b.timestamps.map((s, i) => [i ? h("br", {}) : null, `${time(s.time)}, by ${s.authority}`])
+        : "none yet"],
       ["raw", link(`api/v1/blocks/${b.hash}`, "block JSON")],
     ])),
     h("h2", {}, "Messages"),

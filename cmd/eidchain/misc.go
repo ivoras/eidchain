@@ -13,6 +13,7 @@ import (
 	"eidchain/internal/chain"
 	"eidchain/internal/config"
 	"eidchain/internal/remote"
+	"eidchain/internal/tsa"
 )
 
 // cmdSubmit sends a record and its detached CAdES signature (as made by the
@@ -91,9 +92,22 @@ func cmdVerify(args []string) error {
 		}
 		return fmt.Errorf("%d block file(s) are damaged or do not connect; only height %d could be checked", len(st.Skipped), h)
 	}
+	book, bad := tsa.OpenBook(*data, tsa.Roots())
+	if len(bad) > 0 {
+		for _, line := range bad {
+			fmt.Fprintln(os.Stderr, "  ", line)
+		}
+		return fmt.Errorf("%d timestamp(s) do not verify", len(bad))
+	}
+	stamped := uint64(0)
+	for i := uint64(1); i <= h; i++ {
+		if hash, ok := st.HashAt(i); ok && len(book.List(hash)) > 0 {
+			stamped++
+		}
+	}
 	head, _ := st.Head()
-	fmt.Printf("OK: chain %s verified from the genesis to height %d (head %s) in %s\n",
-		st.P.GenesisHash.Short(), h, head.Short(), time.Since(start).Round(time.Millisecond))
+	fmt.Printf("OK: chain %s verified from the genesis to height %d (head %s) in %s; %d of %d block(s) timestamped\n",
+		st.P.GenesisHash.Short(), h, head.Short(), time.Since(start).Round(time.Millisecond), stamped, h)
 	return nil
 }
 

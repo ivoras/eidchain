@@ -12,6 +12,7 @@ import (
 	"eidchain/internal/chain"
 	"eidchain/internal/config"
 	"eidchain/internal/remote"
+	"eidchain/internal/tsa"
 )
 
 // cmdPull behaves like `docker pull`: the first pull needs the chain's identity
@@ -79,6 +80,12 @@ func cmdPull(args []string) error {
 		return err
 	}
 	head, height := st.Head()
+	book, _ := tsa.OpenBook(*data, tsa.Roots())
+	if added, err := remote.SyncStamps(ctx, st, book, c); err != nil {
+		fmt.Printf("  Timestamps not fetched: %v\n", err)
+	} else if added > 0 {
+		fmt.Printf("  Fetched %d timestamp(s)\n", added)
+	}
 	fmt.Printf("Digest: sha256:%s\n", head)
 	switch {
 	case res.UpToDate:

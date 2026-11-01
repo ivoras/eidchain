@@ -9,11 +9,14 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
+	"io"
 	"math/big"
+	"net/http"
 	"sort"
 	"testing"
 	"time"
@@ -172,5 +175,119 @@ func CadesSign(t testing.TB, l Leaf, content []byte) []byte {
 		digestAlg, enc(0xa0, all), sigAlg, enc(0x04, sig))
 	sd := enc(0x30, []byte{2, 1, 1}, enc(0x31, digestAlg), enc(0x30, oid(1, 2, 840, 113549, 1, 7, 1)),
 		enc(0xa0, l.Cert.Raw), enc(0x31, si))
+	return enc(0x30, oid(1, 2, 840, 113549, 1, 7, 2), enc(0xa0, sd))
+}
+
+// TSA is a fake RFC 3161 timestamp authority.
+type TSA struct {
+	root   *x509.Certificate
+	signer *x509.Certificate
+	key    *ecdsa.PrivateKey
+	t      testing.TB
+
+	WrongESS bool // name the wrong certificate in the signing-certificate attribute
+}
+
+func NewTSA(t testing.TB) *TSA {
+	t.Helper()
+	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rootTpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Test TSA Root"},
+		NotBefore: time.Now().Add(-48 * time.Hour), NotAfter: time.Now().Add(240 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, rootTpl, rootTpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _ := x509.ParseCertificate(der)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "Test TSA Signer"},
+		NotBefore: time.Now().Add(-24 * time.Hour), NotAfter: time.Now().Add(240 * time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
+	}
+	der, err = x509.CreateCertificate(rand.Reader, tpl, root, &key.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, _ := x509.ParseCertificate(der)
+	return &TSA{root: root, signer: signer, key: key, t: t}
+}
+
+func (a *TSA) Roots() *x509.CertPool {
+	p := x509.NewCertPool()
+	p.AddCert(a.root)
+	return p
+}
+
+func (a *TSA) RootName() string { return a.root.Subject.CommonName }
+
+type tsaReq struct {
+	Version int
+	Imprint struct {
+		Alg  pkix.AlgorithmIdentifier
+		Hash []byte
+	}
+	Nonce   *big.Int
+	CertReq bool
+}
+
+// QueryFor builds a request with a fixed nonce.
+func (a *TSA) QueryFor(t testing.TB, hash [32]byte) []byte {
+	var r tsaReq
+	r.Version, r.Nonce, r.CertReq = 1, big.NewInt(7), true
+	r.Imprint.Alg.Algorithm = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
+	r.Imprint.Alg.Parameters = asn1.NullRawValue
+	r.Imprint.Hash = hash[:]
+	return mustMarshal(r)
+}
+
+func (a *TSA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	var q tsaReq
+	if _, err := asn1.Unmarshal(body, &q); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	token := a.sign(q.Imprint.Hash, q.Nonce, time.Now())
+	w.Header().Set("Content-Type", "application/timestamp-reply")
+	w.Write(enc(0x30, enc(0x30, []byte{2, 1, 0}), token))
+}
+
+// Token issues a token for hash at a chosen time.
+func (a *TSA) Token(t testing.TB, hash [32]byte, at time.Time) []byte {
+	return a.sign(hash[:], big.NewInt(7), at)
+}
+
+func (a *TSA) sign(hash []byte, nonce *big.Int, at time.Time) []byte {
+	oid := func(o ...int) []byte { return mustMarshal(asn1.ObjectIdentifier(o)) }
+	attr := func(o []byte, val []byte) []byte { return enc(0x30, o, enc(0x31, val)) }
+	tstOID := oid(1, 2, 840, 113549, 1, 9, 16, 1, 4)
+	sha256Alg := enc(0x30, oid(2, 16, 840, 1, 101, 3, 4, 2, 1), []byte{0x05, 0x00})
+	tst := enc(0x30, []byte{2, 1, 1}, oid(1, 2, 3, 4), enc(0x30, sha256Alg, enc(0x04, hash)),
+		mustMarshal(big.NewInt(at.UnixNano())), enc(0x18, []byte(at.UTC().Format("20060102150405Z"))), mustMarshal(nonce))
+	digest := sha512.Sum384(tst)
+	certHash := sha256.Sum256(a.signer.Raw)
+	if a.WrongESS {
+		certHash = sha256.Sum256(a.root.Raw)
+	}
+	attrs := [][]byte{attr(oid(1, 2, 840, 113549, 1, 9, 3), tstOID), attr(oid(1, 2, 840, 113549, 1, 9, 4), enc(0x04, digest[:])),
+		attr(oid(1, 2, 840, 113549, 1, 9, 16, 2, 47), enc(0x30, enc(0x30, enc(0x30, enc(0x04, certHash[:])))))}
+	sort.Slice(attrs, func(i, j int) bool { return string(attrs[i]) < string(attrs[j]) })
+	var all []byte
+	for _, x := range attrs {
+		all = append(all, x...)
+	}
+	sum := sha512.Sum384(enc(0x31, all))
+	sig, err := ecdsa.SignASN1(rand.Reader, a.key, sum[:])
+	if err != nil {
+		panic(err)
+	}
+	sha384Alg := enc(0x30, oid(2, 16, 840, 1, 101, 3, 4, 2, 2))
+	si := enc(0x30, []byte{2, 1, 1}, enc(0x30, a.signer.RawIssuer, mustMarshal(a.signer.SerialNumber)),
+		sha384Alg, enc(0xa0, all), enc(0x30, oid(1, 2, 840, 10045, 4, 3, 3)), enc(0x04, sig))
+	sd := enc(0x30, []byte{2, 1, 3}, enc(0x31, sha384Alg), enc(0x30, tstOID, enc(0xa0, enc(0x04, tst))),
+		enc(0xa0, a.signer.Raw), enc(0x31, si))
 	return enc(0x30, oid(1, 2, 840, 113549, 1, 7, 2), enc(0xa0, sd))
 }

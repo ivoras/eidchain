@@ -76,6 +76,8 @@ func (n *Node) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/check-cert", n.handleCheckCert)
 	mux.HandleFunc("GET /api/v1/peers", n.handlePeers)
 	mux.HandleFunc("POST /api/v1/peers", n.handleAnnounce)
+	mux.HandleFunc("GET /api/v1/timestamps", n.handleStamps)
+	mux.HandleFunc("POST /api/v1/timestamps", n.handlePostStamps)
 	mux.HandleFunc("GET /api/v1/authorities", n.handleAuthorities)
 	mux.HandleFunc("GET /api/v1/rotations", n.handleRotations)
 	mux.HandleFunc("POST /api/v1/rotations", n.handlePostRotation)

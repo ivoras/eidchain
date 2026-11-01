@@ -4,6 +4,7 @@ package node
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 
 	"eidchain/internal/chain"
 	"eidchain/internal/remote"
+	"eidchain/internal/tsa"
 )
 
 // Options configure a node.
@@ -37,6 +39,13 @@ type Options struct {
 	Advertise         string // this node's public base URL, announced to peers; empty = do not announce
 	NoPeerExchange    bool   // use only the peers named in Peers
 	AllowPrivatePeers bool   // let learned peers have loopback/private addresses (tests, closed networks)
+
+	// Timestamping (see timestamps.go). A node with signing keys requests tokens;
+	// every node stores, serves and syncs them.
+	NoTimestamp   bool            // do not request tokens
+	TSAs          []tsa.Authority // default tsa.Default
+	TSARoots      *x509.CertPool  // default tsa.Roots()
+	TimestampPoll time.Duration   // how often to look for unstamped blocks; default 1m
 }
 
 // Node is a running instance.
@@ -56,6 +65,8 @@ type Node struct {
 	staticOnce   sync.Once
 	staticShared []string // operator peers that may be shared
 	ocspHTTP     *http.Client
+	stamps       *tsa.Book
+	tsaHTTP      *http.Client
 	meta         sync.Map // payload ID -> msgMeta
 	syncing      sync.Map // peer base URL -> a sync is running
 	kick         chan struct{}
@@ -113,6 +124,21 @@ func New(opt Options) (*Node, error) {
 			return nil, fmt.Errorf("--advertise: %w", err)
 		}
 	}
+	if n.opt.TSAs == nil {
+		n.opt.TSAs = tsa.Default
+	}
+	if n.opt.TSARoots == nil {
+		n.opt.TSARoots = tsa.Roots()
+	}
+	if n.opt.TimestampPoll <= 0 {
+		n.opt.TimestampPoll = time.Minute
+	}
+	var skipped []string
+	n.stamps, skipped = tsa.OpenBook(opt.Data, n.opt.TSARoots)
+	for _, line := range skipped {
+		log.Printf("timestamps: skipping %s", line)
+	}
+	n.tsaHTTP = &http.Client{Timeout: 30 * time.Second}
 	n.safeHTTP = safeHTTPClient(opt.AllowPrivatePeers)
 	n.book = newPeerBook(opt.Data, !opt.NoPeerExchange)
 	st.OnChange = n.onChange
@@ -153,6 +179,11 @@ func (n *Node) Run(ctx context.Context) error {
 	go func() { errc <- srv.ListenAndServe() }()
 	go n.produceLoop(ctx)
 	go n.syncLoop(ctx)
+	if len(n.signers) > 0 && !n.opt.NoTimestamp {
+		for _, a := range n.opt.TSAs {
+			go n.stampLoop(ctx, a)
+		}
+	}
 	log.Printf("listening on %s", n.opt.Listen)
 	select {
 	case <-ctx.Done():

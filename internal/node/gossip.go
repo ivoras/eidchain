@@ -88,6 +88,13 @@ func (n *Node) syncPeer(ctx context.Context, p *remote.Client) {
 	n.recordPeerResult(p.Base, err)
 	if err == nil {
 		n.exchange(ctx, p)
+		sctx, cancel := context.WithTimeout(ctx, time.Minute)
+		if added, serr := remote.SyncStamps(sctx, n.store, n.stamps, p); added > 0 {
+			log.Printf("sync from %s: %d timestamp(s)", p.Base, added)
+		} else if serr != nil && !errors.Is(serr, context.Canceled) {
+			log.Printf("timestamps from %s: %v", p.Base, serr)
+		}
+		cancel()
 	}
 	switch {
 	case err != nil && !errors.Is(err, context.Canceled):

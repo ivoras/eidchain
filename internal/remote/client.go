@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"eidchain/internal/chain"
+	"eidchain/internal/tsa"
 )
 
 // Info is the node status served at /api/v1/info.
@@ -198,6 +199,29 @@ func (c *Client) PostRotation(ctx context.Context, rot chain.Rotation) (Rotation
 	return r, err
 }
 
+// BlockStamps carries a block's timestamp tokens.
+type BlockStamps struct {
+	Block  chain.Hash `json:"block"`
+	Tokens [][]byte   `json:"tokens"`
+}
+
+// StampPage is one answer from GET /timestamps; Next is 0 on the last page.
+type StampPage struct {
+	Stamps []BlockStamps `json:"stamps"`
+	Next   uint64        `json:"next"`
+}
+
+func (c *Client) Stamps(ctx context.Context, from uint64) (StampPage, error) {
+	var p StampPage
+	_, err := c.do(ctx, "GET", fmt.Sprintf("/api/v1/timestamps?from=%d", from), nil, &p)
+	return p, err
+}
+
+func (c *Client) PostStamps(ctx context.Context, s BlockStamps) error {
+	_, err := c.do(ctx, "POST", "/api/v1/timestamps", s, nil)
+	return err
+}
+
 // ---- synchronisation ----
 
 // SyncResult summarises a Sync.
@@ -210,6 +234,38 @@ type SyncResult struct {
 }
 
 const batch = 100
+
+// SyncStamps fetches the timestamps of blocks that have none here and returns how
+// many tokens were new. A token the book refuses is skipped: peers are not trusted.
+func SyncStamps(ctx context.Context, st *chain.Store, book *tsa.Book, c *Client) (int, error) {
+	from := uint64(1)
+	for {
+		hash, ok := st.HashAt(from)
+		if !ok {
+			return 0, nil // every block has one
+		}
+		if len(book.List(hash)) == 0 {
+			break
+		}
+		from++
+	}
+	added := 0
+	for from != 0 {
+		page, err := c.Stamps(ctx, from)
+		if err != nil {
+			return added, err
+		}
+		for _, s := range page.Stamps {
+			for _, t := range s.Tokens {
+				if ok, err := book.Add(s.Block, t); ok && err == nil {
+					added++
+				}
+			}
+		}
+		from = page.Next
+	}
+	return added, nil
+}
 
 // Sync downloads and verifies every block the node has that the store lacks.
 // Each block is fully validated by Store.AddBlock; nothing from the remote is

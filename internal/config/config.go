@@ -26,6 +26,9 @@ type File struct {
 	Advertise string `json:"advertise,omitempty"`
 	// PeerExchange false turns peer exchange off (default on).
 	PeerExchange *bool `json:"peerExchange,omitempty"`
+	// Timestamp false stops this node requesting block timestamps (default on for
+	// nodes with signing keys).
+	Timestamp *bool `json:"timestamp,omitempty"`
 	// TrustCAs lists the CA certificates accepted for eID signatures in a NEW
 	// chain (`eidchain genesis`): PEM file paths (relative paths are relative
 	// to the data directory) or "builtin:hr" for the embedded AKDCA Root and
