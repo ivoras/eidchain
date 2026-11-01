@@ -233,17 +233,20 @@ async function run() {
     addDownload(common, JSON.stringify(meta, null, 2), `${base}.sig.json`, "application/json", "hash, algorithms and signature values");
 
     const h = hashFunction.replace("-", "").toLowerCase();
+    // The file name comes from whoever supplied the document and these commands get
+    // pasted into a shell: quote it fully, and keep a leading "-" from being an option.
+    const q = (name) => `'./${name.replaceAll("'", `'\\''`)}'`;
     const cmds = [];
     if (wantCades) {
       cmds.push(`# CAdES: signature and document match (does not check the certificate chain)`,
-        `openssl cms -verify -inform DER -in '${base}.p7s' -content '${base}' -binary -noverify -out /dev/null`,
+        `openssl cms -verify -inform DER -in ${q(`${base}.p7s`)} -content ${q(base)} -binary -noverify -out /dev/null`,
         `# ... and the chain to AKDCA Root / HRIDCA (hr-eid-ca.pem from this site; revocation is not checked)`,
-        `openssl cms -verify -inform DER -in '${base}.p7s' -content '${base}' -binary -CAfile hr-eid-ca.pem -purpose any -out /dev/null`);
+        `openssl cms -verify -inform DER -in ${q(`${base}.p7s`)} -content ${q(base)} -binary -CAfile hr-eid-ca.pem -purpose any -out /dev/null`);
     }
     if (wantPlain) {
       cmds.push(`# plain signature`,
-        `openssl x509 -in '${base}.signer.pem' -pubkey -noout > pub.pem`,
-        `openssl dgst -${h} -verify pub.pem -signature '${base}.sig' '${base}'`);
+        `openssl x509 -in ${q(`${base}.signer.pem`)} -pubkey -noout > pub.pem`,
+        `openssl dgst -${h} -verify pub.pem -signature ${q(`${base}.sig`)} ${q(base)}`);
     }
     $("verify-cmd").textContent = cmds.join("\n");
     resultEl.hidden = false;
