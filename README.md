@@ -218,8 +218,30 @@ Flags may come before or after positional arguments. `-h` lists a command's flag
 | `--ocsp` | `required` | `required` (fail closed) or `skip` (testing only) |
 | `--keys` | `<data>/keys` | Authority private keys (`*.key`, PKCS#8 PEM). A node may hold several, one, or none |
 | `--no-web` | off | Do not serve the web app |
+| `--advertise URL` | none | This node's public base URL (for example `https://host/chain`). Announced to peers so they gossip with it too |
+| `--no-peer-exchange` | off | Use only the peers given with `--peer` |
+| `--peers-allow-private` | off | Allow learned peers on private or loopback addresses (closed networks, testing) |
 
-A node without keys still serves, validates, gossips and syncs; it just never cuts blocks. If several authority nodes run, give each a different subset of keys, list each other as `--peer`, and note that a single running node holding all keys can produce blocks alone.
+A node without keys still serves, validates, gossips and syncs; it just never cuts blocks. If several authority nodes run, give each a different subset of keys, make sure they can reach each other (list each other as `--peer`, or let [peer exchange](#peers-and-peer-exchange) connect them), and note that a single running node holding all keys can produce blocks alone.
+
+### Peers and peer exchange
+
+A node gossips with, and pulls from, its **peers**: the ones you name (`--peer`, or `peers` in `config.json`) and the ones it learns. Links are one-way by default: if A lists B, A pushes to and pulls from B, but B does nothing towards A. Peer exchange closes that gap in two small steps, run after every successful sync with a peer:
+
+1. **Announce.** If the node has a public address (`--advertise https://host/chain`), it tells the peer (`POST /api/v1/peers`). The peer adds it, and from then on pushes to it and pulls from it.
+2. **Learn.** The node asks the peer which peers it knows (`GET /api/v1/peers`: the peer itself, its public configured peers and its healthy learned ones) and adds the new ones.
+
+So given only A→B and B→C, all three end up knowing each other and gossip flows between every pair (tested). Learned peers are kept in `<data>/peers.json`.
+
+Because a node connects to addresses other nodes give it, learned peers are treated with care:
+
+- **Verified before use.** The node fetches the candidate's `/api/v1/info` and requires the same genesis hash; a node on another chain, an unreachable address or a non-node is never added.
+- **Public addresses only.** Loopback, private, link-local and carrier-grade-NAT addresses, `localhost` and `*.local` names are refused, and the check is made on the connection itself, so a host name that resolves to a private address is refused too. No redirects are followed and no proxy is used. Peers *you* configure are exempt (a private LAN is fine); `--peers-allow-private` lifts the rule for learned peers on closed networks.
+- **Bounded.** At most 32 learned peers; 20 announcements accepted per minute in total; a candidate that fails verification is not retried for 10 minutes; a learned peer that fails 6 syncs in a row is dropped; a peer list is capped at 20 addresses.
+- **Strict input.** The announcement body gets the same strict JSON rules as every other request.
+- **Not a trust decision.** A learned peer is only somewhere to push to and pull from. Everything it sends is fully validated like data from any peer.
+
+A node behind NAT can still pull from and push to public nodes; it just can't be reached by them, so it leaves `--advertise` unset. `--no-peer-exchange` turns the whole thing off, and `GET`/`POST /api/v1/peers` then answer 404.
 
 ### `pull`
 
@@ -293,6 +315,8 @@ Generates `--authorities` new keys (default 3, or none if you pass existing publ
   "syncInterval": "30s",
   "ocsp": "required",
   "keysDir": "keys",
+  "advertise": "https://my-node.example/chain",
+  "peerExchange": true,
   "trustCAs": ["builtin:hr"]
 }
 ```
@@ -306,6 +330,7 @@ data/
   genesis.json       the chain's genesis block
   blocks/<hash>.json every valid block seen, including side branches
   pending.json       payloads waiting for the next block (survives restarts)
+  peers.json         peers learned through peer exchange
   keys/*.key         this node's authority private keys (mode 0600)
   config.json        defaults
 ```
@@ -327,6 +352,7 @@ All under `/api/v1`, JSON, CORS open. There is no authentication: every write ne
 | `POST /payloads` | Submit `{"payload": "...", "signature": "<base64 CAdES>"}`. Checks the signature, the certificate chain and OCSP; 422 on rejection |
 | `GET /messages?limit=N` | Pending and recent confirmed records with their signer, for the web app |
 | `GET /authorities` | Current authority key IDs, rotation sequence and quorum |
+| `GET /peers`, `POST /peers` | The peers this node shares (itself, public and healthy ones); announce a node's own address (`{"url": "..."}`), which is verified before it is added |
 | `GET /rotations`, `POST /rotations` | Pending rotation proposals; submit or add approvals |
 | `GET /explorer/blocks?before=H&limit=N` | Block summaries, newest first, with a cursor for older pages |
 | `GET /explorer/block/{height or hash}` | A block with its messages, rotations, neighbours and confirmations |
@@ -373,13 +399,13 @@ go vet ./...
 go test -race ./...
 ```
 
-The tests cover pulling (including finding the fork point of a diverged chain and never moving backwards), CAdES verification (including signatures produced by the browser-side JavaScript signer), the consensus rules, forks and reorgs, key rotation (quorum, replay, retired keys), reopening and re-verifying a stored chain, and a multi-node run over real HTTP with gossip, pull, rotation and the embedded web app.
+The tests cover pulling (including finding the fork point of a diverged chain and never moving backwards), CAdES verification (including signatures produced by the browser-side JavaScript signer), the consensus rules, forks and reorgs, key rotation (quorum, replay, retired keys), reopening and re-verifying a stored chain, peer exchange (discovery, verification, address safety, limits) and a multi-node run over real HTTP with gossip, pull, rotation and the embedded web app.
 
 ```
 cmd/eidchain/        CLI
 deploy/              systemd unit, nginx config, install script
 internal/chain/      data model, hashing, CAdES verification, validation, store, fork choice
-internal/node/       HTTP API, pools, block production, gossip, sync loop
+internal/node/       HTTP API, pools, block production, gossip, peer exchange, sync loop
 internal/remote/     node API client and chain synchronisation (used by pull and by nodes)
 internal/webapp/     embedded example web app and explorer (HTML, JS, CSS)
 internal/hrca/       embedded AKDCA Root, HRIDCA and HRIDCA 2025 certificates
@@ -415,6 +441,6 @@ If a key ever does get pushed, treat it as compromised: rotate it (see [Key rota
 - **OCSP is only checked at submission** by the first node. Other nodes verify the stored response offline and do not re-query.
 - **Trust anchors are fixed by the genesis.** Changing them means a new chain.
 - **Only replacement rotations.** The authority count stays constant; adding or removing authorities is not implemented.
-- **Peers are static.** There is no peer discovery; list peers with `--peer`.
+- **Peer discovery is minimal.** Nodes learn peers from the ones they already have (see [Peers and peer exchange](#peers-and-peer-exchange)), but there is no bootstrap list or DNS discovery: a new node needs at least one peer address to start from.
 - **Whole chain in memory.** Fine for a PoC.
 - **No access control or rate limiting** on the API; the pending pool is capped at 5000 payloads.

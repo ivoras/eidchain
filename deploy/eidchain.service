@@ -21,7 +21,7 @@ Type=simple
 User=ivoras
 Group=ivoras
 WorkingDirectory=/srv/eidchain
-ExecStart=/srv/eidchain/bin/eidchain node --data /srv/eidchain/data --listen 127.0.0.1:8095
+ExecStart=/srv/eidchain/bin/eidchain node --data /srv/eidchain/data --listen 127.0.0.1:8095 --advertise https://eidchain.ivoras.net/chain
 Restart=on-failure
 RestartSec=3
 

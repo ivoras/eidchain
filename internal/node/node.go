@@ -30,19 +30,28 @@ type Options struct {
 	Web           bool   // serve the example web app
 	GenesisHash   chain.Hash
 	MaxPending    int
+
+	// Peer exchange (see peers.go).
+	Advertise         string // this node's public base URL, announced to peers; empty = do not announce
+	NoPeerExchange    bool   // use only the peers named in Peers
+	AllowPrivatePeers bool   // let learned peers have loopback/private addresses (tests, closed networks)
 }
 
 // Node is a running instance.
 type Node struct {
-	opt      Options
-	store    *chain.Store
-	pool     *Pool
-	rots     *RotationPool
-	signers  []chain.Signer
-	peers    []*remote.Client
-	ocspHTTP *http.Client
-	meta     sync.Map // payload ID -> msgMeta
-	kick     chan struct{}
+	opt       Options
+	store     *chain.Store
+	pool      *Pool
+	rots      *RotationPool
+	signers   []chain.Signer
+	peers     []*remote.Client // the operator's peers
+	book      *peerBook        // peers learned through exchange
+	safeHTTP  *http.Client     // client for learned peers: refuses non-public addresses
+	selfURL   string           // normalized Advertise
+	staticSet map[string]bool  // normalized operator peers
+	ocspHTTP  *http.Client
+	meta      sync.Map // payload ID -> msgMeta
+	kick      chan struct{}
 
 	warnMu      sync.Mutex
 	warnedNoKey bool
@@ -80,9 +89,20 @@ func New(opt Options) (*Node, error) {
 		opt: opt, store: st, pool: pool, rots: newRotationPool(), signers: signers,
 		ocspHTTP: &http.Client{Timeout: 10 * time.Second}, kick: make(chan struct{}, 1),
 	}
+	n.staticSet = map[string]bool{}
 	for _, p := range opt.Peers {
 		n.peers = append(n.peers, remote.New(p))
+		if norm, err := normalizePeerURL(p); err == nil {
+			n.staticSet[norm] = true
+		}
 	}
+	if opt.Advertise != "" {
+		if n.selfURL, err = normalizePeerURL(opt.Advertise); err != nil {
+			return nil, fmt.Errorf("--advertise: %w", err)
+		}
+	}
+	n.safeHTTP = safeHTTPClient(opt.AllowPrivatePeers)
+	n.book = newPeerBook(opt.Data, !opt.NoPeerExchange)
 	st.OnChange = n.onChange
 	// Drop pending payloads that are already on the chain.
 	done := map[chain.Hash]bool{}
@@ -104,6 +124,11 @@ func (n *Node) Run(ctx context.Context) error {
 	log.Printf("chain %s (%q)", n.store.P.GenesisHash.Short(), n.store.P.Genesis.Message)
 	log.Printf("head: height %d, %s; %d authorities; %d local signing key(s); ocsp=%s; block interval %s",
 		h, head.Short(), len(n.store.P.Initial.IDs), len(n.signers), n.opt.OCSP, n.opt.BlockInterval)
+	if n.exchangeEnabled() {
+		log.Printf("peers: %d configured, %d learned; peer exchange on, advertising %q", len(n.peers), len(n.book.urls()), n.selfURL)
+	} else {
+		log.Printf("peers: %d configured; peer exchange off", len(n.peers))
+	}
 	for _, c := range n.store.P.Trust.Certificates() {
 		log.Printf("trust anchor: %q ski=%x valid until %s", chain.CertName(c), c.SubjectKeyId, c.NotAfter.Format("2006-01-02"))
 	}

@@ -24,6 +24,9 @@ func cmdNode(args []string) error {
 	ocsp := fs.String("ocsp", "required", `OCSP policy for submitted payloads: "required" or "skip" (testing only)`)
 	keys := fs.String("keys", "", "directory of authority private keys (*.key); default <data>/keys")
 	noWeb := fs.Bool("no-web", false, "do not serve the example web app")
+	advertise := fs.String("advertise", "", "this node's public base URL; announced to peers so they gossip with it too")
+	noExchange := fs.Bool("no-peer-exchange", false, "use only the peers given with --peer")
+	allowPrivate := fs.Bool("peers-allow-private", false, "let learned peers have private or loopback addresses (closed networks, testing)")
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
@@ -50,6 +53,12 @@ func cmdNode(args []string) error {
 			*keys = filepath.Join(*data, *keys) // config paths are relative to the data directory
 		}
 	}
+	if !set["advertise"] && cfg.Advertise != "" {
+		*advertise = cfg.Advertise
+	}
+	if !set["no-peer-exchange"] && cfg.PeerExchange != nil && !*cfg.PeerExchange {
+		*noExchange = true
+	}
 	if !set["peer"] {
 		peers = cfg.Peers
 	}
@@ -68,6 +77,7 @@ func cmdNode(args []string) error {
 	n, err := node.New(node.Options{
 		Data: *data, KeysDir: *keys, Listen: *listen, Peers: peers, BlockInterval: bi, SyncInterval: si,
 		OCSP: *ocsp, Web: !*noWeb, GenesisHash: gh,
+		Advertise: *advertise, NoPeerExchange: *noExchange, AllowPrivatePeers: *allowPrivate,
 	})
 	if err != nil {
 		return err

@@ -221,7 +221,7 @@ async function viewAuthorities(highlight) {
 }
 
 async function viewNode() {
-  const [info, g] = await Promise.all([api("info"), api("genesis")]);
+  const [info, g, peers] = await Promise.all([api("info"), api("genesis"), api("peers").catch(() => null)]);
   setTicker(info.message);
   document.title = "eidchain – node";
   show(
@@ -237,6 +237,9 @@ async function viewNode() {
       ["message size limit", bytes(info.maxPayloadBytes)],
       ["genesis", link("api/v1/genesis", "genesis JSON")],
     ])),
+    peers ? h("div", { class: "card" }, h("h2", {}, "Peers"),
+      h("p", {}, "Nodes this one shares with others. It gossips with these and with the peers it was configured with."),
+      peers.peers.length ? h("ul", {}, peers.peers.map((u) => h("li", { class: "mono" }, u))) : h("p", { class: "small" }, "No public peers to show.")) : null,
     h("div", { class: "card" }, h("h2", {}, "Trusted eID CAs"),
       h("p", {}, "Message signatures are only accepted from certificates issued under these CAs. They are fixed in the genesis block."),
       h("ul", {}, info.trustAnchors.map((n) => h("li", {}, n)))),

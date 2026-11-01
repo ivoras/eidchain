@@ -18,6 +18,11 @@ type File struct {
 	SyncInterval  string   `json:"syncInterval,omitempty"`
 	OCSP          string   `json:"ocsp,omitempty"` // "required" or "skip"
 	KeysDir       string   `json:"keysDir,omitempty"`
+	// Advertise is this node's public base URL (for example https://host/chain). If set,
+	// the node announces it to its peers, which then gossip with it too.
+	Advertise string `json:"advertise,omitempty"`
+	// PeerExchange false turns peer exchange off (default on).
+	PeerExchange *bool `json:"peerExchange,omitempty"`
 	// TrustCAs lists the CA certificates accepted for eID signatures in a NEW
 	// chain (`eidchain genesis`): PEM file paths (relative paths are relative
 	// to the data directory) or "builtin:hr" for the embedded AKDCA Root and

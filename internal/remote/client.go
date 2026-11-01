@@ -174,6 +174,21 @@ func (c *Client) PostPayload(ctx context.Context, e chain.PayloadEntry) (SubmitR
 	return r, err
 }
 
+// Peers returns the peer addresses a node is willing to share.
+func (c *Client) Peers(ctx context.Context) ([]string, error) {
+	var r struct {
+		Peers []string `json:"peers"`
+	}
+	_, err := c.do(ctx, "GET", "/api/v1/peers", nil, &r)
+	return r.Peers, err
+}
+
+// Announce tells a node this node's public address, so it can gossip with us too.
+func (c *Client) Announce(ctx context.Context, url string) error {
+	_, err := c.do(ctx, "POST", "/api/v1/peers", map[string]string{"url": url}, nil)
+	return err
+}
+
 func (c *Client) PostRotation(ctx context.Context, rot chain.Rotation) (RotationStatus, error) {
 	var r RotationStatus
 	_, err := c.do(ctx, "POST", "/api/v1/rotations", rot, &r)

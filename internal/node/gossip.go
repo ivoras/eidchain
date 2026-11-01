@@ -12,7 +12,7 @@ import (
 
 // fanout runs fn against every peer concurrently.
 func (n *Node) fanout(what string, fn func(context.Context, *remote.Client) error) {
-	for _, p := range n.peers {
+	for _, p := range n.allPeers() {
 		go func(p *remote.Client) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
@@ -47,9 +47,6 @@ func (n *Node) broadcastRotation(r chain.Rotation) {
 // syncLoop pulls from every peer at startup, periodically, and when a pushed
 // block arrives whose parent we do not have.
 func (n *Node) syncLoop(ctx context.Context) {
-	if len(n.peers) == 0 {
-		return
-	}
 	t := time.NewTicker(n.opt.SyncInterval)
 	defer t.Stop()
 	n.syncAll(ctx)
@@ -65,10 +62,14 @@ func (n *Node) syncLoop(ctx context.Context) {
 }
 
 func (n *Node) syncAll(ctx context.Context) {
-	for _, p := range n.peers {
+	for _, p := range n.allPeers() {
 		sctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		res, err := remote.Sync(sctx, n.store, p, nil)
 		cancel()
+		n.recordPeerResult(p.Base, err)
+		if err == nil {
+			n.exchange(ctx, p)
+		}
 		switch {
 		case err != nil && !errors.Is(err, context.Canceled):
 			log.Printf("sync from %s: %v", p.Base, err)
