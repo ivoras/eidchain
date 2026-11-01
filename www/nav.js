@@ -13,8 +13,8 @@ const SITE_ITEMS = [
 
 // In the web app all links are relative, so it works at / and under a prefix such as /chain/.
 const APP_ITEMS = [
-  ["post a message", "index.html", (p, h) => !p.endsWith("/explorer.html")],
-  ["explorer", "explorer.html#/blocks", (p, h) => p.endsWith("/explorer.html") && /^#\/(blocks|block|pending)?(\/|$)/.test(h || "#/")],
+  ["post a message", "index.html", (p, h) => !/\/(explorer|pending)\.html$/.test(p)],
+  ["explorer", "explorer.html#/blocks", (p, h) => p.endsWith("/pending.html") || (p.endsWith("/explorer.html") && /^#\/(blocks|block)?(\/|$)/.test(h || "#/"))],
   ["messages", "explorer.html#/messages", (p, h) => p.endsWith("/explorer.html") && /^#\/(messages|tx)(\/|$)/.test(h)],
   ["authorities", "explorer.html#/authorities", (p, h) => p.endsWith("/explorer.html") && /^#\/(authorities|authority)(\/|$)/.test(h)],
   ["node", "explorer.html#/node", (p, h) => p.endsWith("/explorer.html") && /^#\/node(\/|$)/.test(h)],

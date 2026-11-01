@@ -48,8 +48,9 @@ function table(head, rows, numeric = []) {
     h("tbody", {}, rows.map((r) => h("tr", {}, r.map((c, i) => h("td", { class: numeric.includes(i) ? "num" : "" }, c)))))));
 }
 
-function stat(label, value) {
-  return h("div", { class: "stat" }, h("span", { class: "label" }, label), h("b", {}, String(value)));
+function stat(label, value, href) {
+  const kids = [h("span", { class: "label" }, label), h("b", {}, String(value))];
+  return href ? h("a", { class: "stat", href }, kids) : h("div", { class: "stat" }, kids);
 }
 
 function crumbs(...parts) {
@@ -84,8 +85,7 @@ async function viewBlocks(before) {
   ]);
   show(
     heading("explorer", "Blocks.", `“${info.message}”`),
-    h("div", { class: "stats" }, stat("height", info.height), stat("pending", info.pending), stat("authorities", info.authorities.length), stat("rotations", info.rotationSeq)),
-    h("div", { class: "pager" }, link("#/pending", `Pending messages (${info.pending})`, { class: "btn" })),
+    h("div", { class: "stats" }, stat("height", info.height), stat("pending", info.pending, "pending.html"), stat("authorities", info.authorities.length), stat("rotations", info.rotationSeq)),
     list.blocks.length
       ? h("div", { class: "card" }, table(["Height", "Hash", "Time", "Signer", "Msgs", "Rot.", "Size"], rows, [4, 5, 6]),
         list.older ? h("div", { class: "pager" }, link(`#/blocks/${list.older}`, "Older blocks", { class: "btn" })) : null)
@@ -200,28 +200,6 @@ async function viewMessages(before) {
   );
 }
 
-async function viewPending(offset) {
-  const [p, info] = await Promise.all([api(`explorer/pending?offset=${offset}`), api("info")]);
-  setTicker(info.message);
-  document.title = "eidchain – pending";
-  const wait = !p.total ? "Nothing is waiting for a block."
-    : info.canProduce ? `Next block: ${time(info.nextBlockAt)}, oldest messages first.`
-      : "This node cannot sign the next block itself: it waits for another authority.";
-  show(
-    heading("explorer", "Pending messages.", wait),
-    h("div", { class: "stats" }, stat("pending", p.total), stat("next block", info.pending ? time(info.nextBlockAt) : "–")),
-    p.messages.length
-      ? h("ul", { class: "messages" }, p.messages.map((m) => h("li", {},
-        h("span", { class: "badge pending" }, "pending"), m.ocsp ? [" ", h("span", { class: "badge good" }, "ocsp")] : null,
-        h("div", { class: "text" }, messageText(m.payload)),
-        h("div", { class: "meta" }, `${m.subject} · received ${time(m.time)} · `, txLink(m.id, "details")))))
-      : h("div", { class: "card empty" }, "No messages are pending."),
-    h("div", { class: "pager" },
-      offset ? link("#/pending", "First page", { class: "btn" }) : null,
-      p.next ? link(`#/pending/${p.next}`, "More", { class: "btn" }) : null),
-  );
-}
-
 async function viewAuthorities(highlight) {
   const a = await api("explorer/authorities");
   a.history ??= []; a.pending ??= []; a.canSign ??= [];
@@ -252,7 +230,7 @@ async function viewNode() {
   document.title = "eidchain – node";
   show(
     heading("explorer", "This node.", `“${info.message}”`),
-    h("div", { class: "stats" }, stat("height", info.height), stat("pending messages", info.pending), stat("pending rotations", info.pendingRotations), stat("authorities", info.authorities.length)),
+    h("div", { class: "stats" }, stat("height", info.height), stat("pending messages", info.pending, "pending.html"), stat("pending rotations", info.pendingRotations), stat("authorities", info.authorities.length)),
     h("div", { class: "card" }, h("h2", {}, "Chain"), kv([
       ["genesis hash", h("span", { class: "hash" }, info.genesisHash)],
       ["head", info.height ? blockLink(info.head, `#${info.height}`) : "genesis (no blocks yet)"],
@@ -293,7 +271,6 @@ async function route() {
       case "block": return await viewBlock(arg);
       case "tx": return await viewTx(arg);
       case "messages": return await viewMessages(Number(arg) || 0);
-      case "pending": return await viewPending(Number(arg) || 0);
       case "authorities": return await viewAuthorities();
       case "authority": return await viewAuthorities(arg);
       case "node": return await viewNode();

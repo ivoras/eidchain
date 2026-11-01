@@ -216,15 +216,11 @@ func (n *Node) handleExplorerBlocks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"blocks": out, "older": older, "height": height, "head": head})
 }
 
-// handleExplorerMessages pages through messages block by block, newest first.
-// Pending messages come with the first page.
+// handleExplorerMessages pages through confirmed messages block by block, newest first.
 func (n *Node) handleExplorerMessages(w http.ResponseWriter, r *http.Request) {
 	const blocksPerPage = 20
 	before, _ := strconv.ParseUint(r.URL.Query().Get("before"), 10, 64)
 	out := []Message{}
-	if before == 0 {
-		out = n.pendingMessages()
-	}
 	blocks := n.store.Window(before, blocksPerPage)
 	for _, b := range blocks {
 		out = append(out, n.blockMessages(b)...)

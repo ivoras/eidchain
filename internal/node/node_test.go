@@ -777,3 +777,16 @@ func TestExplorerPendingPages(t *testing.T) {
 		t.Fatalf("negative offset: %d", len(bad.Messages))
 	}
 }
+
+func TestExplorerMessagesLeavePendingToItsOwnPage(t *testing.T) {
+	n, _, _ := newSoloNode(t)
+	if _, err := n.pool.Add(poolItem{Entry: chain.PayloadEntry{Payload: `{"waiting":true}`, Signature: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if body := get(n.Handler(), "/api/v1/explorer/messages").Body.String(); strings.Contains(body, "waiting") {
+		t.Errorf("a pending message is in the message list: %s", body)
+	}
+	if body := get(n.Handler(), "/api/v1/explorer/pending").Body.String(); !strings.Contains(body, "waiting") {
+		t.Errorf("the pending API lost it: %s", body)
+	}
+}

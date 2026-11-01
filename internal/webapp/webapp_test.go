@@ -40,7 +40,7 @@ func TestEmbeddedAssetsAreComplete(t *testing.T) {
 
 func TestServesPagesWithStrictHeaders(t *testing.T) {
 	h := Handler()
-	for _, p := range []string{"/", "/explorer.html", "/site.css", "/nav.js", "/explorer.js", "/app.js"} {
+	for _, p := range []string{"/", "/explorer.html", "/pending.html", "/pending.js", "/site.css", "/nav.js", "/explorer.js", "/app.js"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
 		if rec.Code != http.StatusOK {
@@ -51,7 +51,7 @@ func TestServesPagesWithStrictHeaders(t *testing.T) {
 		}
 	}
 	// Pages must not use inline scripts or styles: the CSP would block them.
-	for _, p := range []string{"index.html", "explorer.html"} {
+	for _, p := range []string{"index.html", "explorer.html", "pending.html"} {
 		sub, _ := fs.Sub(content, "static")
 		raw, _ := fs.ReadFile(sub, p)
 		if regexp.MustCompile(`<script(?:\s[^>]*)?>[^<]|\sstyle=|\son[a-z]+=`).Match(raw) {
