@@ -470,22 +470,6 @@ www/                 the eidchain.ivoras.net website, including /signer/, and th
 scripts/             helper scripts
 ```
 
-### Keeping private keys out of git
-
-Authority private keys (`data/keys/*.key`) and all chain data live in `data/`, which is git-ignored. Three layers stop a key from being published by accident:
-
-1. **`.gitignore`** excludes `data/`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.pk8`, `id_*` and `.env`.
-2. **`.githooks/pre-commit`** refuses a commit that adds a PEM/PGP private key block, a key-like file name, or anything under `data/` (even with `git add -f`).
-3. **`.githooks/pre-push`** re-checks every commit about to be pushed, so a leak committed with `--no-verify` or buried in history is still caught.
-
-Both hooks run `scripts/check-no-private-keys.sh`, which you can also run by hand (`--all` scans the whole history). Hooks are not copied by `git clone`, so enable them once per clone:
-
-```sh
-git config core.hooksPath .githooks
-```
-
-If a key ever does get pushed, treat it as compromised: rotate it (see [Key rotation](#key-rotation)) rather than just deleting the commit. The rotation protects running nodes only once 6 blocks follow it, so cut those blocks promptly.
-
 ## Limitations
 
 - **Personal data is permanent.** Every signature embeds the signer's certificate, with their name and, on Croatian cards, their OIB. Blocks are public and immutable, which sits badly with GDPR erasure rights. Get legal advice before running this with real users; storing certificates off-chain would need a new block format.
