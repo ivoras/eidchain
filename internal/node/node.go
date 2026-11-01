@@ -55,10 +55,10 @@ type Node struct {
 
 	staticOnce   sync.Once
 	staticShared []string // operator peers that may be shared
-	ocspHTTP  *http.Client
-	meta      sync.Map // payload ID -> msgMeta
-	syncing   sync.Map // peer base URL -> a sync is running
-	kick      chan struct{}
+	ocspHTTP     *http.Client
+	meta         sync.Map // payload ID -> msgMeta
+	syncing      sync.Map // peer base URL -> a sync is running
+	kick         chan struct{}
 
 	warnMu      sync.Mutex
 	warnedNoKey bool
@@ -214,6 +214,10 @@ func (n *Node) SubmitPayload(ctx context.Context, e chain.PayloadEntry, from str
 		}
 		return remote.SubmitResult{}, ErrBadPayload{err}
 	}
+	if err := n.checkChainField(e.Payload); err != nil {
+		log.Printf("payload %s REJECTED from %s: %v", id.Short(), from, err)
+		return remote.SubmitResult{}, ErrBadPayload{err}
+	}
 	if e.OCSP != "" || n.opt.OCSP == "required" {
 		issuer := n.store.P.Trust.Issuer(info.Cert)
 		if issuer == nil {
@@ -251,6 +255,22 @@ func (n *Node) SubmitPayload(ctx context.Context, e chain.PayloadEntry, from str
 	log.Printf("payload %s accepted (%d bytes, ocsp=%v, issuer %q)", id.Short(), len(e.Payload), e.OCSP != "", info.Cert.Issuer.CommonName)
 	n.broadcastPayload(e)
 	return remote.SubmitResult{Status: "accepted", ID: id, OCSP: e.OCSP != ""}, nil
+}
+
+// checkChainField requires a record to name this chain. Without it, a signature
+// made for another chain, or a signed JSON document meant for something else
+// entirely, could be published here by anyone who holds a copy. This is an
+// admission rule rather than a consensus rule, so blocks made before it stay valid.
+func (n *Node) checkChainField(payload string) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &m); err != nil {
+		return err
+	}
+	var named string
+	if json.Unmarshal(m["chain"], &named) != nil || named != n.store.P.GenesisHash.String() {
+		return fmt.Errorf("the payload must have a \"chain\" field holding this chain's genesis hash, %s", n.store.P.GenesisHash)
+	}
+	return nil
 }
 
 // ---- block production ----

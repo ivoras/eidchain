@@ -96,7 +96,7 @@ The **genesis hash** (SHA-256 over the canonical JSON) is the chain's identity. 
   },
   "payloads": [
     {
-      "payload": "{\"type\":\"message\",\"text\":\"hello\",\"created\":\"2026-11-01T12:00:00.000Z\"}",
+      "payload": "{\"type\":\"message\",\"chain\":\"<genesis hash>\",\"text\":\"hello\",\"created\":\"2026-11-01T12:00:00.000Z\"}",
       "signature": "<base64 DER of the detached CAdES-B-B signature over the payload string's bytes>",
       "ocsp": "<base64 DER OCSP response obtained at submission, optional>"
     }
@@ -299,7 +299,7 @@ Generates `--authorities` new keys (default 3, or none if you pass existing publ
 
 ### `submit`
 
-`eidchain submit [--server URL] PAYLOAD-FILE SIGNATURE-FILE` sends a record that you signed elsewhere, for example with the `/signer/` page (the signature file may be DER, PEM or Base64 `.p7s`). The payload file's exact bytes are what the signature covers.
+`eidchain submit [--server URL] PAYLOAD-FILE SIGNATURE-FILE` sends a record that you signed elsewhere, for example with the `/signer/` page (the signature file may be DER, PEM or Base64 `.p7s`). The payload file's exact bytes are what the signature covers, and the record must be a JSON object with a `chain` field holding the chain's genesis hash. Nodes refuse submissions without it, so a signature cannot be replayed from another chain, and a signed document that was not written for this chain cannot be published on it.
 
 ### `cert`
 
@@ -352,7 +352,7 @@ All under `/api/v1`, JSON, CORS open. There is no authentication: every write ne
 | `GET /blocks?from=H&limit=N` | Canonical blocks from height `H` (limit up to 200; may return fewer, up to about 32 MiB) |
 | `GET /blocks/{hash}` | Any stored block |
 | `POST /blocks` | Push a block (gossip); answers `added`, `known`, or `unknown-parent` |
-| `POST /payloads` | Submit `{"payload": "...", "signature": "<base64 CAdES>"}`. Checks the signature, the certificate chain and OCSP; 422 on rejection |
+| `POST /payloads` | Submit `{"payload": "...", "signature": "<base64 CAdES>"}`. Checks the signature, the certificate chain, the payload's `chain` field and OCSP; 422 on rejection |
 | `GET /messages?limit=N` | Pending and recent confirmed records with their signer, for the web app |
 | `GET /authorities` | Current authority key IDs, rotation sequence and quorum |
 | `GET /peers`, `POST /peers` | The peers this node shares (itself, public and healthy ones); announce a node's own address (`{"url": "..."}`), which is verified before it is added |
@@ -367,7 +367,7 @@ All under `/api/v1`, JSON, CORS open. There is no authentication: every write ne
 
 `eidchain node` serves both at `/` (embedded in the binary):
 
-- **Post a message** (`index.html`): type a message, sign it with your card, submit it. The page reuses the browser modules of the `/signer/` page (Web eID client, DER helpers, CAdES-B-B builder), builds `{"type":"message","text":…,"created":…}`, hashes it, asks the card to sign the CAdES signed attributes (PIN2 prompt) and posts the result. It needs the [Web eID](https://web-eid.eu) extension and app, plus the card middleware, and an **HTTPS or localhost** origin.
+- **Post a message** (`index.html`): type a message, sign it with your card, submit it. The page reuses the browser modules of the `/signer/` page (Web eID client, DER helpers, CAdES-B-B builder), builds `{"type":"message","chain":…,"text":…,"created":…}`, hashes it, asks the card to sign the CAdES signed attributes (PIN2 prompt) and posts the result. It needs the [Web eID](https://web-eid.eu) extension and app, plus the card middleware, and an **HTTPS or localhost** origin.
 - **Explorer** (`explorer.html`, hash-routed): `#/blocks` (latest blocks, paged), `#/block/<height or hash>`, `#/messages`, `#/tx/<message id>` (the message, the signer's certificate, the CAdES details and the stored OCSP result, and the payload verbatim), `#/authorities` (current keys, rotation history, proposals), `#/node` (genesis hash, trusted CAs, block timing) and a search box in the nav bar that takes a height, block hash, message id or authority key id. Lists show only the signer's common name; the detail page shows the certificate's subject fields except `serialNumber`, the personal ID number. That only limits what the API displays: the certificate itself is in the CAdES signature in every block, so the number stays readable from the raw block, and nothing written to the chain can be erased. The web app tells users this before they sign.
 - **Nav bar and ticker** (`nav.js`): one small module builds the bar for both the website and the app, highlights the current page, and shows the chain's genesis message as a scrolling ticker.
 
@@ -442,6 +442,7 @@ If a key ever does get pushed, treat it as compromised: rotate it (see [Key rota
 - **Time is whatever the signer's clock says.** There are no trusted timestamps; block times are checked only against the parent and a 5-minute future bound.
 - **Weak finality.** Running nodes limit reorganisations (see [Fork choice](#fork-choice)), but nothing proves to a new node which of two branches came first, and blocks have no minimum spacing.
 - **Key separation is up to you.** The majority rule means nothing if one machine holds a majority of the keys, as the PoC deployment does.
+- **The `chain` field is checked at submission, not in blocks,** like OCSP: an authority that bypasses the API can still include a record without it.
 - **OCSP is only checked at submission** by the first node. Other nodes verify the stored response offline and do not re-query.
 - **Trust anchors are fixed by the genesis.** Changing them means a new chain.
 - **Only replacement rotations.** The authority count stays constant; adding or removing authorities is not implemented.

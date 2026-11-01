@@ -112,7 +112,7 @@ func TestPeerExchangeConnectsEveryone(t *testing.T) {
 
 	// Gossip now flows over links nobody configured: C (index 2) was only ever
 	// reachable from B, yet a message submitted to A arrives at both.
-	p := `{"type":"message","text":"exchange"}`
+	p := record(w.g.Hash(), "exchange")
 	e := chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, w.card, []byte(p)))}
 	if _, err := nodes[0].SubmitPayload(ctx, e, "test"); err != nil {
 		t.Fatal(err)

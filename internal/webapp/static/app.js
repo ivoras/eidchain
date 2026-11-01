@@ -6,6 +6,7 @@ import { setTicker } from "./nav.js";
 const $ = (id) => document.getElementById(id);
 const HASH_PREFERENCE = ["SHA-256", "SHA-384", "SHA-512"];
 let maxBytes = 10 * 1024;
+let chainId = ""; // the genesis hash: records name their chain, so they cannot be replayed on another
 
 const ERRORS = {
   ERR_WEBEID_EXTENSION_UNAVAILABLE: "The Web eID extension did not answer. Check that it is enabled for this site, then reload the page.",
@@ -21,13 +22,13 @@ const utf8 = (s) => new TextEncoder().encode(s);
 onTrace((line) => { $("trace").textContent += `${new Date().toISOString().slice(11, 23)}  ${line}\n`; });
 
 function record(text) {
-  return JSON.stringify({ type: "message", text, created: new Date().toISOString() });
+  return JSON.stringify({ type: "message", chain: chainId, text, created: new Date().toISOString() });
 }
 
 function updateCount() {
   const bytes = utf8(record($("text").value)).length;
   $("count").textContent = `${bytes} / ${maxBytes} bytes`;
-  $("submit").disabled = bytes > maxBytes || !$("text").value.trim();
+  $("submit").disabled = bytes > maxBytes || !$("text").value.trim() || !chainId;
   $("count").style.color = bytes > maxBytes ? "var(--err)" : "";
 }
 
@@ -43,6 +44,7 @@ async function refresh() {
   try {
     const info = await getJSON("api/v1/info");
     maxBytes = info.maxPayloadBytes;
+    chainId = info.genesisHash;
     $("chain").textContent = `“${info.message}”`;
     setTicker(info.message);
     const next = info.pending > 0 ? fmtTime(info.nextBlockAt) : `every ${info.blockIntervalSeconds / 60} min`;

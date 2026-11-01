@@ -33,12 +33,33 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// record is a payload bound to the chain it is submitted to.
+func record(h chain.Hash, text string) string {
+	return `{"type":"message","chain":"` + h.String() + `","text":"` + text + `"}`
+}
+
+func TestRecordMustNameThisChain(t *testing.T) {
+	n, card, _ := newSoloNode(t)
+	for _, p := range []string{`{"type":"message","text":"unbound"}`, record(chain.Hash{1}, "for another chain")} {
+		e := chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, card, []byte(p)))}
+		if _, err := n.SubmitPayload(context.Background(), e, "test"); err == nil {
+			t.Errorf("accepted %s", p)
+		}
+	}
+	p := record(n.store.P.GenesisHash, "for this chain")
+	e := chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, card, []byte(p)))}
+	if _, err := n.SubmitPayload(context.Background(), e, "test"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTwoNodesGossipSyncAndRotation(t *testing.T) {
 	ctx := context.Background()
 	pki := testpki.New(t)
 	card := pki.Leaf(t, "PERA PERIC", x509.KeyUsageContentCommitment, false)
+	var genesisHash chain.Hash
 	entry := func(text string, l testpki.Leaf) chain.PayloadEntry {
-		p := `{"type":"message","text":"` + text + `"}`
+		p := record(genesisHash, text)
 		return chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, l, []byte(p)))}
 	}
 
@@ -56,6 +77,7 @@ func TestTwoNodesGossipSyncAndRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	genesisHash = g.Hash()
 	mkDir := func(signers ...*chain.Signer) string {
 		dir := t.TempDir()
 		if _, err := chain.Init(dir, g); err != nil {
@@ -307,7 +329,7 @@ func TestLogsContainNoPIIOnSuccess(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
-	p := `{"type":"message","text":"private words"}`
+	p := record(n.store.P.GenesisHash, "private words")
 	good, _ := json.Marshal(chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, card, []byte(p)))})
 	if rec := post(h, "/api/v1/payloads", string(good)); rec.Code != 200 {
 		t.Fatalf("submit: %d %s", rec.Code, rec.Body.String())
@@ -343,7 +365,7 @@ func TestLogsContainNoPIIOnSuccess(t *testing.T) {
 func TestExplorerAPI(t *testing.T) {
 	n, card, _ := newSoloNode(t)
 	h := n.Handler()
-	p := `{"type":"message","text":"hello explorer"}`
+	p := record(n.store.P.GenesisHash, "hello explorer")
 	e := chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, card, []byte(p)))}
 	body, _ := json.Marshal(e)
 	if rec := post(h, "/api/v1/payloads", string(body)); rec.Code != 200 {
