@@ -790,3 +790,12 @@ func TestExplorerMessagesLeavePendingToItsOwnPage(t *testing.T) {
 		t.Errorf("the pending API lost it: %s", body)
 	}
 }
+
+func TestInfoReportsUptime(t *testing.T) {
+	n, _, _ := newSoloNode(t)
+	n.started = time.Now().Add(-90 * time.Second)
+	info := n.info()
+	if info.UptimeSeconds < 90 || info.UptimeSeconds > 95 || info.StartedAt != n.started.Unix() {
+		t.Fatalf("uptime %d, started %d", info.UptimeSeconds, info.StartedAt)
+	}
+}

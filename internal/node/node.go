@@ -66,6 +66,7 @@ type Node struct {
 	meta         sync.Map // payload ID -> msgMeta
 	syncing      sync.Map // peer base URL -> a sync is running
 	kick         chan struct{}
+	started      time.Time
 
 	diagMu    sync.Mutex
 	diagStart time.Time
@@ -105,7 +106,7 @@ func New(opt Options) (*Node, error) {
 	}
 	n := &Node{
 		opt: opt, store: st, pool: pool, rots: newRotationPool(), signers: signers,
-		ocspHTTP: &http.Client{Timeout: 10 * time.Second}, kick: make(chan struct{}, 1),
+		ocspHTTP: &http.Client{Timeout: 10 * time.Second}, kick: make(chan struct{}, 1), started: time.Now(),
 	}
 	n.lookupIP = net.DefaultResolver.LookupIPAddr
 	n.staticSet = map[string]bool{}

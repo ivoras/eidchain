@@ -35,6 +35,8 @@ type Info struct {
 	CanProduce           bool           `json:"canProduce"`
 	TrustAnchors         []string       `json:"trustAnchors"` // subjects of the eID CA certificates fixed in the genesis
 	Features             chain.Schedule `json:"features,omitempty"`
+	StartedAt            int64          `json:"startedAt"`
+	UptimeSeconds        int64          `json:"uptimeSeconds"`
 }
 
 // SubmitResult is the answer to a payload submission.

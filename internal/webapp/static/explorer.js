@@ -30,6 +30,12 @@ const blockLink = (ref, text) => link(`#/block/${ref}`, text ?? String(ref));
 const hashLink = (hash) => link(`#/block/${hash}`, short(hash), { class: "hash", title: hash });
 const keyLink = (id) => link(`#/authority/${id}`, short(id, 8, 4), { class: "hash", title: id });
 const txLink = (id, text) => link(`#/tx/${id}`, text ?? short(id), { class: "hash", title: id });
+function duration(seconds) {
+  const d = Math.floor(seconds / 86400), h = Math.floor(seconds / 3600) % 24, m = Math.floor(seconds / 60) % 60;
+  if (d) return `${d} d ${h} h ${m} min`;
+  if (h) return `${h} h ${m} min`;
+  return m ? `${m} min` : `${seconds} s`;
+}
 const bytes = (n) => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KiB`);
 
 function heading(eyebrow, title, lead) {
@@ -238,6 +244,7 @@ async function viewNode() {
       ["block interval", `${info.blockIntervalSeconds / 60} min, only when messages are waiting`],
       ["next block", time(info.nextBlockAt)],
       ["this node can sign now", info.canProduce ? "yes" : "no"],
+      ["uptime", `${duration(info.uptimeSeconds)}, since ${time(info.startedAt)}`],
       ["message size limit", bytes(info.maxPayloadBytes)],
       ["genesis", link("api/v1/genesis", "genesis JSON")],
     ])),
