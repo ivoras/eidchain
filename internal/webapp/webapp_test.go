@@ -59,3 +59,18 @@ func TestServesPagesWithStrictHeaders(t *testing.T) {
 		}
 	}
 }
+
+// nav.js runs on every page, so this puts the link in every footer.
+func TestNavAddsTheSourceLink(t *testing.T) {
+	sub, _ := fs.Sub(content, "static")
+	raw, _ := fs.ReadFile(sub, "nav.js")
+	if !strings.Contains(string(raw), "https://github.com/ivoras/eidchain") || !strings.Contains(string(raw), "addSourceLink();") {
+		t.Fatal("nav.js does not add the source link")
+	}
+	for _, p := range []string{"index.html", "explorer.html", "pending.html"} {
+		page, _ := fs.ReadFile(sub, p)
+		if !strings.Contains(string(page), `src="nav.js"`) {
+			t.Errorf("%s does not load nav.js", p)
+		}
+	}
+}

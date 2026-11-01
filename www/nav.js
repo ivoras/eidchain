@@ -3,6 +3,8 @@
 // DOM construction only (no innerHTML); loads nothing and fetches nothing.
 // Source of truth: www/nav.js. scripts/sync-webapp.sh copies it into the app.
 
+const REPO_URL = "https://github.com/ivoras/eidchain";
+
 const SITE_ITEMS = [
   ["home", "/", (p) => p === "/" || p === "/index.html"],
   ["signer", "/signer/", (p) => p.startsWith("/signer")],
@@ -80,11 +82,23 @@ export function setTicker(text) {
   ticker.replaceChildren(track);
 }
 
+/** Adds the project link to the page's footer, creating one if the page has none. */
+function addSourceLink() {
+  let foot = document.querySelector(".foot");
+  if (!foot) {
+    foot = el("p", { class: "foot" });
+    (document.querySelector("main") ?? document.body).append(foot);
+  }
+  if (foot.textContent) foot.append(el("br"));
+  foot.append(el("a", { href: REPO_URL, rel: "noopener" }, "Source on GitHub"));
+}
+
 function mount() {
   const mode = document.body.dataset.nav;
   if (!mode) return;
   document.body.prepend(build(mode));
   setTicker(document.body.dataset.ticker);
+  addSourceLink();
 }
 
 if (document.readyState === "loading") addEventListener("DOMContentLoaded", mount);
