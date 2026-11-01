@@ -39,9 +39,6 @@ var errPoolFull = errors.New("pending pool is full")
 
 func newPool(dir string, max int) (*Pool, error) {
 	p := &Pool{path: filepath.Join(dir, "pending.jsonl"), max: max, ids: map[chain.Hash]bool{}}
-	if err := p.migrate(filepath.Join(dir, "pending.json")); err != nil {
-		return nil, err
-	}
 	raw, err := os.ReadFile(p.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return p, nil
@@ -64,26 +61,6 @@ func newPool(dir string, max int) (*Pool, error) {
 		}
 	}
 	return p, nil
-}
-
-// migrate converts the old pending.json, a single JSON array.
-func (p *Pool) migrate(old string) error {
-	raw, err := os.ReadFile(old)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(raw, &p.items); err != nil {
-		log.Printf("pending pool: discarding unreadable %s: %v", old, err)
-		p.items = nil
-	}
-	if err := p.rewrite(); err != nil {
-		return err
-	}
-	p.items = nil
-	return os.Remove(old)
 }
 
 // rewrite replaces the file atomically with the current items.

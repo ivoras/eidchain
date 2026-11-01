@@ -333,7 +333,7 @@ func (n *Node) exchange(ctx context.Context, p *remote.Client) {
 	list, err := p.Peers(lctx)
 	cancel()
 	if err != nil {
-		return // an older node without peer exchange, or a transient failure
+		return // peer exchange turned off there, or a transient failure
 	}
 	if len(list) > maxSharedPeers {
 		list = list[:maxSharedPeers]

@@ -336,7 +336,7 @@ Commands that talk to a node use `--server URL`, else the first peer in `config.
 data/
   genesis.json       the chain's genesis block
   blocks/<hash>.json every valid block seen, including side branches
-  pending.jsonl      payloads waiting for the next block (survives restarts; an old pending.json is converted)
+  pending.jsonl      payloads waiting for the next block (survives restarts)
   peers.json         peers learned through peer exchange
   keys/*.key         this node's authority private keys (mode 0600)
   config.json        defaults

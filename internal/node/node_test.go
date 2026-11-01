@@ -636,21 +636,19 @@ func TestClientAddrCannotBeSpoofed(t *testing.T) {
 	}
 }
 
-func TestPoolSurvivesDamageAndMigrates(t *testing.T) {
+func TestPoolSurvivesDamage(t *testing.T) {
 	dir := t.TempDir()
 	item := func(text string) poolItem {
 		return poolItem{Entry: chain.PayloadEntry{Payload: text, Signature: "x" + text}}
 	}
-	old, _ := json.Marshal([]poolItem{item("a")})
-	if err := os.WriteFile(filepath.Join(dir, "pending.json"), old, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	p, err := newPool(dir, 10)
-	if err != nil || p.Len() != 1 {
-		t.Fatalf("migration: %v, %d items", err, p.Len())
-	}
-	if _, err := p.Add(item("b")); err != nil {
+	if err != nil {
 		t.Fatal(err)
+	}
+	for _, text := range []string{"a", "b"} {
+		if _, err := p.Add(item(text)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	f, _ := os.OpenFile(filepath.Join(dir, "pending.jsonl"), os.O_WRONLY|os.O_APPEND, 0)
 	f.WriteString(`{"entry":{"payl`) // a crash in the middle of a write
