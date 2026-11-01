@@ -57,6 +57,7 @@ type Node struct {
 	staticShared []string // operator peers that may be shared
 	ocspHTTP  *http.Client
 	meta      sync.Map // payload ID -> msgMeta
+	syncing   sync.Map // peer base URL -> a sync is running
 	kick      chan struct{}
 
 	warnMu      sync.Mutex

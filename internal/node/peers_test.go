@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"crypto/x509"
+	"eidchain/internal/remote"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -307,5 +308,44 @@ func TestPeerExchangeCanBeDisabled(t *testing.T) {
 	}
 	if got := peerBases(nodes[0]); len(got) != 1 || !got[srvs[1].URL] {
 		t.Errorf("configured peers changed: %v", got)
+	}
+}
+
+func TestOneHostCannotFillThePeerBook(t *testing.T) {
+	w := newPeerWorld(t, "hosts")
+	nodes, _ := w.start(1, nil, nil)
+	n := nodes[0]
+	n.opt.AllowPrivatePeers = false
+	n.book.learned["https://evil.example/a"] = &learnedPeer{URL: "https://evil.example/a"}
+	n.book.learned["https://evil.example:8443/b"] = &learnedPeer{URL: "https://evil.example:8443/b"}
+	_, err := n.addLearned(context.Background(), "https://evil.example/c")
+	if err == nil || !strings.Contains(err.Error(), "too many learned peers") {
+		t.Fatalf("third peer on one host: %v", err)
+	}
+}
+
+func TestSlowPeerDoesNotDelayOthers(t *testing.T) {
+	w := newPeerWorld(t, "slow")
+	nodes, srvs := w.start(2, nil, nil)
+	n := nodes[0]
+	release := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	defer slow.Close()
+	defer close(release)
+	n.peers = []*remote.Client{remote.New(slow.URL), remote.New(srvs[1].URL)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go n.syncAll(ctx)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, busy := n.syncing.Load(slow.URL); busy {
+			if _, other := n.syncing.Load(srvs[1].URL); !other {
+				return // the healthy peer finished while the slow one hangs
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the healthy peer was held up by the slow one")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sync"
 	"time"
 
 	"eidchain/internal/chain"
@@ -49,7 +50,7 @@ func (n *Node) broadcastRotation(r chain.Rotation) {
 func (n *Node) syncLoop(ctx context.Context) {
 	t := time.NewTicker(n.opt.SyncInterval)
 	defer t.Stop()
-	n.syncAll(ctx)
+	go n.syncAll(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -57,25 +58,42 @@ func (n *Node) syncLoop(ctx context.Context) {
 		case <-t.C:
 		case <-n.kick:
 		}
-		n.syncAll(ctx)
+		go n.syncAll(ctx) // never wait: a slow peer must not hold up the others
 	}
 }
 
+// syncAll syncs with every peer at once and returns when they are done. A peer
+// still busy from an earlier round is skipped, so a slow or hostile peer only ever
+// costs its own connection.
 func (n *Node) syncAll(ctx context.Context) {
+	var wg sync.WaitGroup
 	for _, p := range n.allPeers() {
-		sctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		res, err := remote.Sync(sctx, n.store, p, nil)
-		cancel()
-		n.recordPeerResult(p.Base, err)
-		if err == nil {
-			n.exchange(ctx, p)
+		if _, busy := n.syncing.LoadOrStore(p.Base, true); busy {
+			continue
 		}
-		switch {
-		case err != nil && !errors.Is(err, context.Canceled):
-			log.Printf("sync from %s: %v", p.Base, err)
-		case err == nil && res.Fetched > 0:
-			log.Printf("sync from %s: fetched %d block(s), now at height %d", p.Base, res.Fetched, res.Height)
-		}
+		wg.Add(1)
+		go func(p *remote.Client) {
+			defer wg.Done()
+			defer n.syncing.Delete(p.Base)
+			n.syncPeer(ctx, p)
+		}(p)
+	}
+	wg.Wait()
+}
+
+func (n *Node) syncPeer(ctx context.Context, p *remote.Client) {
+	sctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	res, err := remote.Sync(sctx, n.store, p, nil)
+	cancel()
+	n.recordPeerResult(p.Base, err)
+	if err == nil {
+		n.exchange(ctx, p)
+	}
+	switch {
+	case err != nil && !errors.Is(err, context.Canceled):
+		log.Printf("sync from %s: %v", p.Base, err)
+	case err == nil && res.Fetched > 0:
+		log.Printf("sync from %s: fetched %d block(s), now at height %d", p.Base, res.Fetched, res.Height)
 	}
 }
 

@@ -240,7 +240,7 @@ Because a node connects to addresses other nodes give it, learned peers are trea
 
 - **Verified before use.** The node fetches the candidate's `/api/v1/info` and requires the same genesis hash; a node on another chain, an unreachable address or a non-node is never added.
 - **Public addresses only.** Loopback, private, link-local and carrier-grade-NAT addresses, `localhost` and `*.local` names are refused, and the check is made on the connection itself, so a host name that resolves to a private address is refused too. No redirects are followed and no proxy is used. Peers *you* configure are exempt (a private LAN is fine); `--peers-allow-private` lifts the rule for learned peers on closed networks.
-- **Bounded.** At most 32 learned peers; 20 announcements accepted per minute in total; a candidate that fails verification is not retried for 10 minutes; a learned peer that fails 6 syncs in a row is dropped; a peer list is capped at 20 addresses.
+- **Bounded.** At most 32 learned peers, and 2 per host name; peers sync independently, so a slow one delays nobody else; 20 announcements accepted per minute in total; a candidate that fails verification is not retried for 10 minutes; a learned peer that fails 6 syncs in a row is dropped; a peer list is capped at 20 addresses.
 - **Strict input.** The announcement body gets the same strict JSON rules as every other request.
 - **Not a trust decision.** A learned peer is only somewhere to push to and pull from. Everything it sends is fully validated like data from any peer.
 

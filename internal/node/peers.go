@@ -36,6 +36,7 @@ import (
 // private; they are not shared with others unless they are public.
 const (
 	maxLearnedPeers = 32
+	maxPeersPerHost = 2 // learned peers on one host, so one server cannot fill the book
 	maxSharedPeers  = 20
 	maxPeerFailures = 6                // consecutive failed syncs before a learned peer is dropped
 	reannounceEvery = 30 * time.Minute // how often to repeat our announcement to a peer
@@ -101,6 +102,25 @@ func (b *peerBook) urls() []string {
 		out = append(out, u)
 	}
 	return out
+}
+
+// onHostLocked counts learned peers that share a host name with u, whatever their
+// port or path.
+func (b *peerBook) onHostLocked(u string) int {
+	host := func(s string) string {
+		p, err := url.Parse(s)
+		if err != nil {
+			return s
+		}
+		return p.Hostname()
+	}
+	count, want := 0, host(u)
+	for known := range b.learned {
+		if host(known) == want {
+			count++
+		}
+	}
+	return count
 }
 
 // ---- address checks ----
@@ -262,6 +282,9 @@ func (n *Node) addLearned(ctx context.Context, raw string) (string, error) {
 	case len(n.book.learned) >= maxLearnedPeers:
 		n.book.mu.Unlock()
 		return norm, errPeerLimit
+	case !n.opt.AllowPrivatePeers && n.book.onHostLocked(norm) >= maxPeersPerHost:
+		n.book.mu.Unlock()
+		return norm, errors.New("too many learned peers on that host")
 	case time.Since(n.book.rejected[norm]) < rejectedMemory:
 		n.book.mu.Unlock()
 		return norm, errors.New("recently failed verification")
