@@ -47,7 +47,8 @@ func (p *Params) VerifyPayload(e PayloadEntry, at time.Time) (*PayloadInfo, erro
 		return nil, fmt.Errorf("signature: %w", err)
 	}
 	if err := p.Trust.Verify(s.Cert, s.Certs, at); err != nil {
-		return nil, fmt.Errorf("signer certificate not trusted: %w", err)
+		return nil, fmt.Errorf("signer certificate not trusted: %w (issuer %q; the genesis trusts %s; the issuer's certificate may be published at %v)",
+			err, CertName2(s.Cert.Issuer.CommonName, s.Cert.Issuer.Organization), p.Trust.Names(), s.Cert.IssuingCertificateURL)
 	}
 	if p.Rules.RequireNonRepudiation && s.Cert.KeyUsage&x509.KeyUsageContentCommitment == 0 {
 		return nil, errors.New("signer certificate lacks the non-repudiation key usage (is this the authentication certificate?)")

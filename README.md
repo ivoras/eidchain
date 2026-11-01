@@ -17,7 +17,7 @@ The repository also holds the website that runs at `eidchain.ivoras.net` (`www/`
 - **Proof of authority with any-key-signs-any-block.** Any key in the authority set may sign any block. Forks are resolved by *highest chain wins, ties broken by the lowest block hash*. A key may not sign if it signed one of the previous `floor(N/2)` blocks (the Clique rule), so rewriting history takes a majority of the keys.
 - **Authority key rotation inside the chain.** A block may carry `rotations`: control messages that replace one authority key with another. They must be approved by at least a quorum (default: a majority) of the keys that are valid *at that point in the chain*, and they take effect from the next block. Old blocks stay valid under the keys that were current when they were signed.
 - **eID-signed payloads.** A payload is a JSON object (at most 10 KiB). Its signature is a detached CAdES-B-B CMS signature over the exact payload bytes, made by the signing certificate on the card. Every node re-verifies the signature and the certificate chain.
-- **Configurable eID CAs.** The trusted CA certificates are chosen when a chain is created (default: the Croatian AKDCA Root and HRIDCA, embedded). Certificates from other EU countries can be added in the config file.
+- **Configurable eID CAs.** The trusted CA certificates are chosen when a chain is created (default: the Croatian AKDCA Root, HRIDCA and HRIDCA 2025, embedded). Certificates from other EU countries can be added in the config file.
 - **OCSP at submission.** When a payload is submitted, the node asks the signer certificate's OCSP responder and fails closed. The signed OCSP response is stored in the block next to the payload so anyone can audit it later (it is committed to by the block hash but is *not* a block validity rule, because revocation answers change over time).
 - **Gossip and pull.** Nodes push new blocks, payloads and rotation approvals to configured peers and also pull from them periodically. `eidchain pull` downloads a chain from a running node with `docker pull` semantics: you name the chain by its genesis hash, everything is verified locally from the genesis, and a repeated pull fetches only what is new.
 - **Block production every 10 minutes.** If any payloads are waiting, an authority node cuts a block on every 10-minute wall-clock boundary, regardless of how many payloads there are.
@@ -53,7 +53,7 @@ The data directory defaults to `./data`; change it with `--data DIR` or the `EID
 `genesis/poc-genesis.json` is the genesis of the PoC chain created on 2026-11-01 from the lead BBC News headline. Its hash is
 
 ```
-ac566c3fe2d682f0a3ffd17f19d2360aead79cc98c4aba52e3c771283f9fb884
+1a96878e47753109e410c9a7980397182502a4930cd9f495957da20ae2645a82
 ```
 
 The genesis file is public. The three authority *private* keys exist only in `data/keys/` on the machine that created it (that directory is git-ignored).
@@ -149,7 +149,7 @@ Payload signatures are checked against the CA certificates in the genesis block.
 
 1. `eidchain genesis --trust-ca FILE` (repeatable; `builtin:hr` names the embedded AKD CA bundle),
 2. `trustCAs` in `<data>/config.json`,
-3. the default `builtin:hr` (AKDCA Root + HRIDCA, published at [eid.hr](https://eid.hr/en/certificates/certificates-akdca-root-and-hridca)).
+3. the default `builtin:hr`: AKDCA Root, HRIDCA (cards issued before May 2025) and HRIDCA 2025 (newer AKD eID 2.0 cards). The first two are published at [eid.hr](https://eid.hr/en/certificates/certificates-akdca-root-and-hridca); HRIDCA 2025 at `https://eid.hr/cert/hridca2025.crt` (it is issued by AKDCA Root, which is how it was checked).
 
 To accept cards from another EU country, put that country's qualified-certificate CA certificates (PEM, roots and intermediates) in files and list them:
 
@@ -198,8 +198,8 @@ A node without keys still serves, validates, gossips and syncs; it just never cu
 ### `pull`
 
 ```
-$ eidchain pull --data ./other --genesis-hash ac566c3f… http://host:8080
-Pulling chain ac566c3fe2d6 from http://host:8080
+$ eidchain pull --data ./other --genesis-hash 1a96878e… http://host:8080
+Pulling chain 1a96878e4775 from http://host:8080
   "BBC News, 1 November 2026: …"
   Fetching blocks 1-42 of 42
 Digest: sha256:51e123afc468…
@@ -228,7 +228,7 @@ Generates `--authorities` new keys (default 3, or none if you pass existing publ
 
 ```json
 {
-  "genesisHash": "ac566c3f…",
+  "genesisHash": "1a96878e…",
   "listen": ":8080",
   "peers": ["http://other-node:8080"],
   "blockInterval": "10m",
@@ -313,7 +313,7 @@ internal/chain/      data model, hashing, CAdES verification, validation, store,
 internal/node/       HTTP API, pools, block production, gossip, sync loop
 internal/remote/     node API client and chain synchronisation (used by pull and by nodes)
 internal/webapp/     embedded example web app
-internal/hrca/       embedded AKDCA Root and HRIDCA certificates
+internal/hrca/       embedded AKDCA Root, HRIDCA and HRIDCA 2025 certificates
 internal/config/     config.json
 internal/testpki/    test-only CA and CAdES builder
 genesis/             public genesis files

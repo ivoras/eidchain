@@ -16,6 +16,7 @@ Usage:
   eidchain rotate   create|sign|submit      rotate an authority key
   eidchain verify   [flags]                 re-verify the local chain from the genesis
   eidchain info     [flags] [SERVER-URL]    show a node's status
+  eidchain cert     [flags] CERT-FILE       inspect an eID certificate and check it against the chain's CAs
 
 Every command takes -h for its flags. The data directory defaults to ./data
 (override with --data or EIDCHAIN_DATA); <data>/config.json supplies defaults.
@@ -43,6 +44,8 @@ func main() {
 		err = cmdVerify(args)
 	case "info":
 		err = cmdInfo(args)
+	case "cert":
+		err = cmdCert(args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

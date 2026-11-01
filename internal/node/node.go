@@ -104,6 +104,9 @@ func (n *Node) Run(ctx context.Context) error {
 	log.Printf("chain %s (%q)", n.store.P.GenesisHash.Short(), n.store.P.Genesis.Message)
 	log.Printf("head: height %d, %s; %d authorities; %d local signing key(s); ocsp=%s; block interval %s",
 		h, head.Short(), len(n.store.P.Initial.IDs), len(n.signers), n.opt.OCSP, n.opt.BlockInterval)
+	for _, c := range n.store.P.Trust.Certificates() {
+		log.Printf("trust anchor: %q ski=%x valid until %s", chain.CertName(c), c.SubjectKeyId, c.NotAfter.Format("2006-01-02"))
+	}
 	srv := &http.Server{Addr: n.opt.Listen, Handler: n.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
@@ -165,18 +168,23 @@ func (e ErrBadPayload) Unwrap() error { return e.Err }
 // SubmitPayload validates a record and queues it for the next block. The
 // signer's certificate is checked against the OCSP responder (or against the
 // OCSP response that came with the record, for gossiped payloads).
-func (n *Node) SubmitPayload(ctx context.Context, e chain.PayloadEntry) (remote.SubmitResult, error) {
+func (n *Node) SubmitPayload(ctx context.Context, e chain.PayloadEntry, from string) (remote.SubmitResult, error) {
 	id := e.ID()
 	if n.store.OnChain(id) || n.pool.Has(id) {
 		return remote.SubmitResult{Status: "known", ID: id}, nil
 	}
 	info, err := n.store.P.VerifyPayload(e, time.Now())
 	if err != nil {
+		log.Printf("payload %s REJECTED from %s: %v", id.Short(), from, err)
+		for _, line := range n.store.P.DiagnosePayload(e) {
+			log.Printf("  | %s", line)
+		}
 		return remote.SubmitResult{}, ErrBadPayload{err}
 	}
 	if e.OCSP != "" || n.opt.OCSP == "required" {
 		issuer := n.store.P.Trust.Issuer(info.Cert)
 		if issuer == nil {
+			log.Printf("payload %s REJECTED from %s: no trust anchor issued the signer certificate: %s", id.Short(), from, chain.DescribeCert(info.Cert))
 			return remote.SubmitResult{}, ErrBadPayload{errors.New("the signer's issuing CA is not among the genesis trust anchors")}
 		}
 		if e.OCSP != "" {
@@ -185,11 +193,13 @@ func (n *Node) SubmitPayload(ctx context.Context, e chain.PayloadEntry) (remote.
 				return remote.SubmitResult{}, ErrBadPayload{errors.New("ocsp is not valid base64")}
 			}
 			if err := chain.VerifyOCSP(raw, info.Cert, issuer, time.Now()); err != nil {
+				log.Printf("payload %s REJECTED from %s: supplied OCSP response invalid: %v", id.Short(), from, err)
 				return remote.SubmitResult{}, ErrBadPayload{fmt.Errorf("ocsp: %w", err)}
 			}
 		} else {
 			raw, err := chain.FetchOCSP(ctx, n.ocspHTTP, info.Cert, issuer)
 			if err != nil {
+				log.Printf("payload %s REJECTED from %s: %v; signer certificate: %s", id.Short(), from, err, chain.DescribeCert(info.Cert))
 				return remote.SubmitResult{}, ErrBadPayload{err}
 			}
 			e.OCSP = base64.StdEncoding.EncodeToString(raw)
@@ -203,7 +213,8 @@ func (n *Node) SubmitPayload(ctx context.Context, e chain.PayloadEntry) (remote.
 		return remote.SubmitResult{Status: "known", ID: id}, nil
 	}
 	n.meta.Store(id, msgMeta{info.Subject, info.Serial})
-	log.Printf("payload %s accepted from %s", id.Short(), info.Subject)
+	log.Printf("payload %s accepted from %s (%d bytes, ocsp=%v): signer %s, issuer %q, serial %s",
+		id.Short(), from, len(e.Payload), e.OCSP != "", info.Subject, info.Cert.Issuer.CommonName, info.Serial)
 	n.broadcastPayload(e)
 	return remote.SubmitResult{Status: "accepted", ID: id, OCSP: e.OCSP != ""}, nil
 }

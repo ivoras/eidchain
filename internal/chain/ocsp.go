@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -34,19 +35,24 @@ func FetchOCSP(ctx context.Context, client *http.Client, cert, issuer *x509.Cert
 			continue
 		}
 		httpReq.Header.Set("Content-Type", "application/ocsp-request")
+		start := time.Now()
 		resp, err := client.Do(httpReq)
 		if err != nil {
+			log.Printf("ocsp: %s for serial %s: request failed after %s: %v", url, cert.SerialNumber.Text(16), time.Since(start).Round(time.Millisecond), err)
 			lastErr = err
 			continue
 		}
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
+		log.Printf("ocsp: %s for serial %s: HTTP %d, %d bytes, content-type %q, %s", url, cert.SerialNumber.Text(16),
+			resp.StatusCode, len(body), resp.Header.Get("Content-Type"), time.Since(start).Round(time.Millisecond))
 		if err != nil || resp.StatusCode != http.StatusOK {
 			lastErr = fmt.Errorf("OCSP responder %s: HTTP %d", url, resp.StatusCode)
 			continue
 		}
 		if err := VerifyOCSP(body, cert, issuer, time.Now()); err != nil {
-			lastErr = err
+			log.Printf("ocsp: %s for serial %s: response rejected: %v", url, cert.SerialNumber.Text(16), err)
+			lastErr = fmt.Errorf("OCSP responder %s: %w", url, err)
 			continue
 		}
 		return body, nil

@@ -1,12 +1,16 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/base64"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,4 +195,48 @@ func repeat(s string, n int) string {
 		out = append(out, s...)
 	}
 	return string(out)
+}
+
+// A rejected payload must leave enough in the log to see why: the signer
+// certificate's fields and how it relates to each trust anchor.
+func TestRejectedPayloadIsExplainedInTheLog(t *testing.T) {
+	pki := testpki.New(t)
+	k, _ := chain.GenerateKey()
+	pub, _ := chain.EncodePublicKey(&k.PublicKey)
+	g, err := chain.NewGenesis("log test", []chain.Authority{{PublicKey: pub}}, []string{pki.RootPEM, pki.InterPEM}, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if _, err := chain.Init(dir, g); err != nil {
+		t.Fatal(err)
+	}
+	n, err := New(Options{Data: dir, Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	stranger := testpki.New(t).Leaf(t, "STRANGER", x509.KeyUsageContentCommitment, false)
+	p := `{"type":"message","text":"hi"}`
+	_, err = n.SubmitPayload(context.Background(),
+		chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, stranger, []byte(p)))}, "203.0.113.5")
+	if err == nil {
+		t.Fatal("untrusted payload accepted")
+	}
+	out := buf.String()
+	t.Log("\n" + out)
+	for _, want := range []string{"REJECTED from 203.0.113.5", "signer certificate:", "subject=", "issuer=", "aki=",
+		"trust anchor", "authority key id", "path verification now"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q", want)
+		}
+	}
+	// Neither the payload text nor signature bytes belong in the log.
+	if strings.Contains(out, "hi\"}") || strings.Contains(out, "MII") {
+		t.Error("log leaks payload text or signature bytes")
+	}
 }

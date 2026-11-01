@@ -101,3 +101,20 @@ func CertName(c *x509.Certificate) string {
 	}
 	return name
 }
+
+// Names lists the trust anchors by short name, for error messages.
+func (t *TrustStore) Names() []string {
+	var out []string
+	for _, c := range t.all {
+		out = append(out, CertName(c))
+	}
+	return out
+}
+
+// CertName2 formats a CN and organisations like CertName does for a certificate.
+func CertName2(cn string, orgs []string) string {
+	if len(orgs) > 0 {
+		return cn + " (" + orgs[0] + ")"
+	}
+	return cn
+}

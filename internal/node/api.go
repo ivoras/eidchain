@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"eidchain/internal/chain"
@@ -72,7 +75,40 @@ func (n *Node) Handler() http.Handler {
 	if n.opt.Web {
 		mux.Handle("/", webapp.Handler())
 	}
-	return cors(mux)
+	return accessLog(cors(mux))
+}
+
+// clientAddr is the caller's address, honouring the reverse proxy's header.
+func clientAddr(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		first, _, _ := strings.Cut(xff, ",")
+		return strings.TrimSpace(first)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(c int) { s.status = c; s.ResponseWriter.WriteHeader(c) }
+
+// accessLog logs every write request and every failed request. Successful GETs
+// are not logged: the web app polls every few seconds.
+func accessLog(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: 200}
+		start := time.Now()
+		h.ServeHTTP(rec, r)
+		if r.Method != http.MethodGet && r.Method != http.MethodOptions || rec.status >= 400 {
+			log.Printf("http: %s %s from %s -> %d (%s)", r.Method, r.URL.Path, clientAddr(r), rec.status, time.Since(start).Round(time.Millisecond))
+		}
+	})
 }
 
 func (n *Node) info() remote.Info {
@@ -159,9 +195,12 @@ func (n *Node) handlePostBlock(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, chain.ErrKnown):
 		writeJSON(w, 200, map[string]string{"status": "known"})
 	case errors.Is(err, chain.ErrUnknownParent):
+		log.Printf("block %s (height %d) from %s has an unknown parent %s: syncing", b.Hash().Short(), b.Header.Height, clientAddr(r), b.Header.Prev.Short())
 		n.kickSync() // we are behind: catch up from our peers
 		writeJSON(w, 202, map[string]string{"status": "unknown-parent"})
 	case err != nil:
+		log.Printf("block %s (height %d, signer %.12s…, %d payload(s), %d rotation(s)) from %s REJECTED: %v",
+			b.Hash().Short(), b.Header.Height, b.Header.Signer, len(b.Payloads), len(b.Rotations), clientAddr(r), err)
 		writeErr(w, 422, err)
 	default:
 		_ = res
@@ -175,7 +214,7 @@ func (n *Node) handlePostPayload(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, 256<<10, &e) {
 		return
 	}
-	res, err := n.SubmitPayload(r.Context(), e)
+	res, err := n.SubmitPayload(r.Context(), e, clientAddr(r))
 	var bad ErrBadPayload
 	switch {
 	case errors.As(err, &bad):
@@ -207,6 +246,7 @@ func (n *Node) handlePostRotation(w http.ResponseWriter, r *http.Request) {
 	}
 	id, approvals, changed, err := n.rots.Add(n.store.P, n.store.HeadState(), rot)
 	if err != nil {
+		log.Printf("rotation %s from %s REJECTED: %v", id.Short(), clientAddr(r), err)
 		writeErr(w, 422, err)
 		return
 	}
