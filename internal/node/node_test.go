@@ -668,3 +668,16 @@ func TestPoolSurvivesDamageAndMigrates(t *testing.T) {
 		t.Fatalf("%d items after remove", r.Len())
 	}
 }
+
+func TestDiagnosisIsRateLimited(t *testing.T) {
+	n := &Node{}
+	allowed := 0
+	for i := 0; i < 100; i++ {
+		if n.allowDiagnosis() {
+			allowed++
+		}
+	}
+	if allowed != diagnosesPerMinute {
+		t.Fatalf("%d diagnoses allowed", allowed)
+	}
+}

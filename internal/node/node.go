@@ -60,6 +60,10 @@ type Node struct {
 	syncing      sync.Map // peer base URL -> a sync is running
 	kick         chan struct{}
 
+	diagMu    sync.Mutex
+	diagStart time.Time
+	diagCount int
+
 	warnMu      sync.Mutex
 	warnedNoKey bool
 }
@@ -209,8 +213,10 @@ func (n *Node) SubmitPayload(ctx context.Context, e chain.PayloadEntry, from str
 	info, err := n.store.P.VerifyPayload(e, time.Now())
 	if err != nil {
 		log.Printf("payload %s REJECTED from %s: %v", id.Short(), from, err)
-		for _, line := range n.store.P.DiagnosePayload(e) {
-			log.Printf("  | %s", line)
+		if n.allowDiagnosis() {
+			for _, line := range n.store.P.DiagnosePayload(e) {
+				log.Printf("  | %s", line)
+			}
 		}
 		return remote.SubmitResult{}, ErrBadPayload{err}
 	}
@@ -255,6 +261,20 @@ func (n *Node) SubmitPayload(ctx context.Context, e chain.PayloadEntry, from str
 	log.Printf("payload %s accepted (%d bytes, ocsp=%v, issuer %q)", id.Short(), len(e.Payload), e.OCSP != "", info.Cert.Issuer.CommonName)
 	n.broadcastPayload(e)
 	return remote.SubmitResult{Status: "accepted", ID: id, OCSP: e.OCSP != ""}, nil
+}
+
+// diagnosesPerMinute limits the long explanation of a rejected payload. Anyone can
+// send rejected payloads, and it logs fields of an unverified certificate.
+const diagnosesPerMinute = 6
+
+func (n *Node) allowDiagnosis() bool {
+	n.diagMu.Lock()
+	defer n.diagMu.Unlock()
+	if now := time.Now(); now.Sub(n.diagStart) > time.Minute {
+		n.diagStart, n.diagCount = now, 0
+	}
+	n.diagCount++
+	return n.diagCount <= diagnosesPerMinute
 }
 
 // checkChainField requires a record to name this chain. Without it, a signature

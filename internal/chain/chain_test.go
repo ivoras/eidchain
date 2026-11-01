@@ -446,3 +446,16 @@ func TestOnlyListedCAsAreTrusted(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestUntrustedCertificateIsRefusedBeforeSignatureWork(t *testing.T) {
+	e := newEnv(t, 3)
+	p, _ := chain.NewParams(e.genesis)
+	stranger := newPKI(t).Leaf(t, "STRANGER", x509.KeyUsageContentCommitment, false)
+	text := `{"text":"x"}`
+	sig := cadesSign(t, stranger, []byte(text))
+	sig[len(sig)-1] ^= 1 // a signature that would fail if it were ever checked
+	entry := chain.PayloadEntry{Payload: text, Signature: base64.StdEncoding.EncodeToString(sig)}
+	if _, err := p.VerifyPayload(entry, time.Now()); err == nil || !strings.Contains(err.Error(), "not trusted") {
+		t.Fatalf("got %v, want the trust failure first", err)
+	}
+}

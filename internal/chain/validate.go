@@ -46,13 +46,20 @@ func (p *Params) VerifyPayload(e PayloadEntry, at time.Time) (*PayloadInfo, erro
 	if err != nil || len(sig) == 0 || len(sig) > 64*1024 {
 		return nil, errors.New("signature is not valid base64 (or too large)")
 	}
-	s, err := VerifyDetached(sig, []byte(e.Payload))
+	var untrusted error
+	s, err := verifyDetached(sig, []byte(e.Payload), func(c *x509.Certificate) error {
+		if err := p.Trust.Verify(c, at); err != nil {
+			untrusted = fmt.Errorf("signer certificate not trusted: %w (issuer %q; the genesis trusts %s; the issuer's certificate may be published at %v)",
+				err, CertName2(c.Issuer.CommonName, c.Issuer.Organization), p.Trust.Names(), c.IssuingCertificateURL)
+			return untrusted
+		}
+		return nil
+	})
+	if untrusted != nil {
+		return nil, untrusted
+	}
 	if err != nil {
 		return nil, fmt.Errorf("signature: %w", err)
-	}
-	if err := p.Trust.Verify(s.Cert, at); err != nil {
-		return nil, fmt.Errorf("signer certificate not trusted: %w (issuer %q; the genesis trusts %s; the issuer's certificate may be published at %v)",
-			err, CertName2(s.Cert.Issuer.CommonName, s.Cert.Issuer.Organization), p.Trust.Names(), s.Cert.IssuingCertificateURL)
 	}
 	if p.Rules.RequireNonRepudiation && s.Cert.KeyUsage&x509.KeyUsageContentCommitment == 0 {
 		return nil, errors.New("signer certificate lacks the non-repudiation key usage (is this the authentication certificate?)")

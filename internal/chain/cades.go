@@ -30,6 +30,9 @@ var (
 	}
 )
 
+// maxRSABits bounds the work one signature can demand. No eID card comes close.
+const maxRSABits = 8192
+
 // Signature is the verified content of a detached CAdES-B-B signature.
 type Signature struct {
 	Cert         *x509.Certificate
@@ -178,6 +181,13 @@ func signerCertHash(sig []byte) ([32]byte, error) {
 // message digest, and the ESS signing-certificate-v2 binding that CAdES-B-B
 // requires. It does not judge the certificate; see TrustStore.Verify.
 func VerifyDetached(sig, content []byte) (*Signature, error) {
+	return verifyDetached(sig, content, nil)
+}
+
+// verifyDetached runs precheck on the signer's certificate before any public-key
+// work. That work is the expensive part and its cost is set by the key in the
+// certificate, so a certificate nobody trusts must not get that far.
+func verifyDetached(sig, content []byte, precheck func(*x509.Certificate) error) (*Signature, error) {
 	certs, si, err := parseSignedData(sig)
 	if err != nil {
 		return nil, err
@@ -211,6 +221,11 @@ func VerifyDetached(sig, content []byte) (*Signature, error) {
 	cert, err := findSigner(si[1], certs)
 	if err != nil {
 		return nil, err
+	}
+	if precheck != nil {
+		if err := precheck(cert); err != nil {
+			return nil, err
+		}
 	}
 
 	// Signed attributes.
@@ -286,6 +301,9 @@ func VerifyDetached(sig, content []byte) (*Signature, error) {
 	digest := ah.Sum(nil)
 	switch pub := cert.PublicKey.(type) {
 	case *rsa.PublicKey:
+		if pub.N.BitLen() > maxRSABits {
+			return nil, errors.New("RSA key is too large")
+		}
 		if err := rsa.VerifyPKCS1v15(pub, hashFn, digest, sigValue); err != nil {
 			return nil, errors.New("RSA signature invalid")
 		}
