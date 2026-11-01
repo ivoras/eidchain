@@ -444,3 +444,7 @@ If a key ever does get pushed, treat it as compromised: rotate it (see [Key rota
 - **Peer discovery is minimal.** Nodes learn peers from the ones they already have (see [Peers and peer exchange](#peers-and-peer-exchange)), but there is no bootstrap list or DNS discovery: a new node needs at least one peer address to start from.
 - **Whole chain in memory.** Fine for a PoC.
 - **No access control or rate limiting** on the API; the pending pool is capped at 5000 payloads.
+
+## License
+
+eidchain is free software, licensed under the **GNU General Public License, version 3** (see [`LICENSE`](LICENSE)). It uses `golang.org/x/crypto` (BSD 3-clause), which is compatible. The embedded Croatian eID CA certificates are public documents published by the issuing authority (AKD).
