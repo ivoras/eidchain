@@ -1,6 +1,7 @@
 package node
 
 import (
+	"crypto/x509/pkix"
 	"bytes"
 	"context"
 	"crypto/x509"
@@ -531,5 +532,16 @@ func TestPullResolvesAForkAndNeverGoesBackwards(t *testing.T) {
 	}
 	if head, h := x.Head(); head != y3.Hash() || h != 3 {
 		t.Fatal("pulling from a node that is behind moved the local head")
+	}
+}
+
+func TestExplorerHidesThePersonalIDNumber(t *testing.T) {
+	l := testpki.New(t).LeafSubject(t, pkix.Name{CommonName: "PERIC PERO", SerialNumber: "PNOHR-12345678903"})
+	if got := chain.SubjectDetail(l.Cert); strings.Contains(got, "12345678903") || !strings.Contains(got, "PERIC PERO") {
+		t.Fatalf("subject detail: %q", got)
+	}
+	noCN := testpki.New(t).LeafSubject(t, pkix.Name{SerialNumber: "PNOHR-12345678903"})
+	if got := chain.SubjectName(noCN.Cert); strings.Contains(got, "12345678903") {
+		t.Fatalf("subject name: %q", got)
 	}
 }

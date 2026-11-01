@@ -77,6 +77,22 @@ func (p *PKI) Leaf(t testing.TB, cn string, usage x509.KeyUsage, useEC bool) Lea
 	return Leaf{c, key}
 }
 
+// LeafSubject issues a non-repudiation certificate with the given subject.
+func (p *PKI) LeafSubject(t testing.TB, subject pkix.Name) Leaf {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: subject,
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(48 * time.Hour), KeyUsage: x509.KeyUsageContentCommitment,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, p.interCert, key.Public(), p.interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := x509.ParseCertificate(der)
+	return Leaf{c, key}
+}
+
 // CadesSign builds a detached CAdES-B-B signature, mirroring www/signer/cades.js.
 func enc(tag byte, parts ...[]byte) []byte {
 	var body []byte

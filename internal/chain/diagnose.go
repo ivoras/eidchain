@@ -191,19 +191,27 @@ func SubjectName(c *x509.Certificate) string {
 	if c.Subject.CommonName != "" {
 		return c.Subject.CommonName
 	}
-	return c.Subject.String()
+	return SubjectDetail(c)
 }
 
+// oidSubjectSerial is the subject's serialNumber attribute. On national eID
+// cards it holds the personal ID number (ETSI EN 319 412-1 "PNOHR-" + OIB).
+const oidSubjectSerial = "2.5.4.5"
+
 var subjectLabels = map[string]string{
-	"2.5.4.3": "CN", "2.5.4.4": "surname", "2.5.4.42": "givenName", "2.5.4.5": "serialNumber",
+	"2.5.4.3": "CN", "2.5.4.4": "surname", "2.5.4.42": "givenName",
 	"2.5.4.6": "C", "2.5.4.10": "O", "2.5.4.11": "OU", "2.5.4.97": "organizationIdentifier",
 }
 
-// SubjectDetail renders every subject attribute with a readable label, in place
-// of the raw OID hex that x509's own String() produces for the less common ones.
+// SubjectDetail renders the subject attributes with readable labels, in place of
+// the raw OID hex that x509's own String() produces for the less common ones. It
+// is for public display, so the personal ID number in serialNumber is left out.
 func SubjectDetail(c *x509.Certificate) string {
 	var parts []string
 	for _, n := range c.Subject.Names {
+		if n.Type.String() == oidSubjectSerial {
+			continue
+		}
 		label := subjectLabels[n.Type.String()]
 		if label == "" {
 			label = n.Type.String()
@@ -211,7 +219,7 @@ func SubjectDetail(c *x509.Certificate) string {
 		parts = append(parts, fmt.Sprintf("%s=%v", label, n.Value))
 	}
 	if len(parts) == 0 {
-		return c.Subject.String()
+		return "(no displayable subject)"
 	}
 	return strings.Join(parts, ", ")
 }
