@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -679,5 +680,64 @@ func TestDiagnosisIsRateLimited(t *testing.T) {
 	}
 	if allowed != diagnosesPerMinute {
 		t.Fatalf("%d diagnoses allowed", allowed)
+	}
+}
+
+func TestMessagesRespectTheLimit(t *testing.T) {
+	n, _, _ := newSoloNode(t)
+	for i := 0; i < 5; i++ {
+		e := chain.PayloadEntry{Payload: fmt.Sprintf(`{"n":%d}`, i), Signature: "x"}
+		if _, err := n.pool.Add(poolItem{Entry: e}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []Message
+	if err := json.Unmarshal(get(n.Handler(), "/api/v1/messages?limit=2").Body.Bytes(), &got); err != nil || len(got) != 2 {
+		t.Fatalf("%v, %d messages", err, len(got))
+	}
+}
+
+func TestSearchAcceptsShortenedHashes(t *testing.T) {
+	n, card, _ := newSoloNode(t)
+	p := record(n.store.P.GenesisHash, "find me")
+	e := chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, card, []byte(p)))}
+	if _, err := n.SubmitPayload(context.Background(), e, "test"); err != nil {
+		t.Fatal(err)
+	}
+	n.produce()
+	head, _ := n.store.Head()
+	full := head.String()
+	h := n.Handler()
+	for _, q := range []string{full[:8] + url.QueryEscape("…") + full[58:], full[:12]} {
+		var r map[string]string
+		rec := get(h, "/api/v1/explorer/search?q="+q)
+		if json.Unmarshal(rec.Body.Bytes(), &r) != nil || r["kind"] != "block" || r["ref"] != full {
+			t.Errorf("%s: %d %s", q, rec.Code, rec.Body)
+		}
+	}
+	if rec := get(h, "/api/v1/explorer/search?q=0"); !strings.Contains(rec.Body.String(), "node") {
+		t.Errorf("height 0: %s", rec.Body)
+	}
+	if rec := get(h, "/api/v1/explorer/messages"); !strings.Contains(rec.Body.String(), "find me") {
+		t.Errorf("message pages: %s", rec.Body)
+	}
+}
+
+func TestCheckCert(t *testing.T) {
+	n, card, pki := newSoloNode(t)
+	check := func(der []byte) map[string]any {
+		body, _ := json.Marshal(map[string]string{"certificate": base64.StdEncoding.EncodeToString(der)})
+		var r map[string]any
+		json.Unmarshal(post(n.Handler(), "/api/v1/check-cert", string(body)).Body.Bytes(), &r)
+		return r
+	}
+	if r := check(card.Cert.Raw); r["ok"] != true {
+		t.Errorf("a signing card: %v", r)
+	}
+	if r := check(pki.Leaf(t, "AUTH", x509.KeyUsageDigitalSignature, true).Cert.Raw); r["ok"] != false {
+		t.Errorf("an authentication certificate: %v", r)
+	}
+	if r := check(testpki.New(t).Leaf(t, "STRANGER", x509.KeyUsageContentCommitment, true).Cert.Raw); r["ok"] != false {
+		t.Errorf("an unknown issuer: %v", r)
 	}
 }

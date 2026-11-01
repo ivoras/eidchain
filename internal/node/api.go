@@ -1,6 +1,8 @@
 package node
 
 import (
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -71,6 +73,7 @@ func (n *Node) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/blocks", n.handlePostBlock)
 	mux.HandleFunc("GET /api/v1/messages", n.handleMessages)
 	mux.HandleFunc("POST /api/v1/payloads", n.handlePostPayload)
+	mux.HandleFunc("POST /api/v1/check-cert", n.handleCheckCert)
 	mux.HandleFunc("GET /api/v1/peers", n.handlePeers)
 	mux.HandleFunc("POST /api/v1/peers", n.handleAnnounce)
 	mux.HandleFunc("GET /api/v1/authorities", n.handleAuthorities)
@@ -296,23 +299,63 @@ func (n *Node) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	out := n.pendingMessages()
+	for _, b := range n.store.Latest(limit) {
+		out = append(out, n.blockMessages(b)...)
+		if len(out) >= limit {
+			break
+		}
+	}
+	writeJSON(w, 200, out[:min(limit, len(out))])
+}
+
+func (n *Node) pendingMessages() []Message {
 	out := []Message{}
 	for _, it := range n.pool.Snapshot() {
 		out = append(out, Message{Status: "pending", ID: it.Entry.ID(), Payload: it.Entry.Payload,
 			Subject: it.Subject, Serial: it.Serial, Time: it.Added, OCSP: it.Entry.OCSP != ""})
 	}
-	for _, b := range n.store.Latest(limit) {
-		h := b.Hash()
-		for _, e := range b.Payloads {
-			if len(out) >= limit {
-				break
-			}
-			m := n.metaFor(e, time.Unix(b.Header.Time, 0))
-			out = append(out, Message{Status: "confirmed", ID: e.ID(), Payload: e.Payload, Subject: m.Subject,
-				Serial: m.Serial, Height: b.Header.Height, Block: &h, Time: b.Header.Time, OCSP: e.OCSP != ""})
-		}
+	return out
+}
+
+func (n *Node) blockMessages(b *chain.Block) []Message {
+	h := b.Hash()
+	out := make([]Message, 0, len(b.Payloads))
+	for _, e := range b.Payloads {
+		m := n.metaFor(e, time.Unix(b.Header.Time, 0))
+		out = append(out, Message{Status: "confirmed", ID: e.ID(), Payload: e.Payload, Subject: m.Subject,
+			Serial: m.Serial, Height: b.Header.Height, Block: &h, Time: b.Header.Time, OCSP: e.OCSP != ""})
 	}
-	writeJSON(w, 200, out)
+	return out
+}
+
+// handleCheckCert tells the web app, before it asks for a PIN, whether a card's
+// certificate could be accepted, so nobody signs only to be refused afterwards.
+func (n *Node) handleCheckCert(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Certificate string `json:"certificate"` // base64 DER
+	}
+	if !decode(w, r, 16<<10, &req) {
+		return
+	}
+	der, err := base64.StdEncoding.DecodeString(req.Certificate)
+	if err != nil {
+		writeErr(w, 400, errors.New("certificate is not valid base64"))
+		return
+	}
+	c, err := x509.ParseCertificate(der)
+	if err != nil {
+		writeErr(w, 400, errors.New("not a certificate"))
+		return
+	}
+	problem := ""
+	switch {
+	case n.store.P.Trust.Verify(c, time.Now()) != nil:
+		problem = "This chain does not accept certificates from your card's issuer, or the certificate has expired. Trusted issuers: " + strings.Join(n.store.P.Trust.Names(), ", ") + "."
+	case n.store.P.Rules.RequireNonRepudiation && c.KeyUsage&x509.KeyUsageContentCommitment == 0:
+		problem = "This is not the card's signing certificate."
+	}
+	writeJSON(w, 200, map[string]any{"ok": problem == "", "problem": problem})
 }
 
 // metaFor returns the signer details of a payload, caching the (slow) verification.

@@ -6,6 +6,7 @@ import { buildSignedAttributes, buildCms, toPem } from "./cades.js";
 
 const MAX_BYTES = 256 * 1024 * 1024; // the whole file is held in memory for hashing
 const MAX_ATTACHED_BYTES = 32 * 1024 * 1024; // .p7m embeds a copy of the document
+const LANG = (navigator.language || "en").slice(0, 2); // for the Web eID dialogs
 const HASH_PREFERENCE = ["SHA-256", "SHA-384", "SHA-512"]; // what WebCrypto can compute
 const HASH_BYTES = { "SHA-256": 32, "SHA-384": 48, "SHA-512": 64 };
 const CURVES = [["P-256", 32], ["P-384", 48], ["P-521", 66]];
@@ -152,7 +153,7 @@ async function run() {
     const data = new Uint8Array(await file.arrayBuffer());
 
     setStatus("Reading the signing certificate from the card…");
-    const { certificate, supportedSignatureAlgorithms } = await getSigningCertificate({ lang: "hr" });
+    const { certificate, supportedSignatureAlgorithms } = await getSigningCertificate({ lang: LANG });
     const certDer = b64ToBytes(certificate);
     const info = parseCertificate(certDer);
 
@@ -184,7 +185,7 @@ async function run() {
       pinPrompt();
       const attrs = await buildSignedAttributes(digest, certDer, info, new Date());
       const attrsHash = new Uint8Array(await crypto.subtle.digest(hashFunction, attrs.toBeSigned));
-      const { signature, signatureAlgorithm } = await sign(certificate, bytesToB64(attrsHash), hashFunction, { lang: "hr" });
+      const { signature, signatureAlgorithm } = await sign(certificate, bytesToB64(attrsHash), hashFunction, { lang: LANG });
       if (signatureAlgorithm.paddingScheme === "PSS") throw new Error("The card used RSA-PSS, which this page does not put into CAdES.");
 
       setStatus("Checking the signature against the certificate…");
@@ -212,7 +213,7 @@ async function run() {
 
     if (wantPlain) {
       pinPrompt();
-      const { signature, signatureAlgorithm } = await sign(certificate, bytesToB64(digest), hashFunction, { lang: "hr" });
+      const { signature, signatureAlgorithm } = await sign(certificate, bytesToB64(digest), hashFunction, { lang: LANG });
       setStatus("Checking the signature against the certificate…");
       const sigBytes = b64ToBytes(signature);
       if (!(await verifySignature(info.spki, hashFunction, signatureAlgorithm, sigBytes, data))) {

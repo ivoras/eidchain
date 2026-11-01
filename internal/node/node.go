@@ -247,6 +247,9 @@ func (n *Node) SubmitPayload(ctx context.Context, e chain.PayloadEntry, from str
 			raw, err := chain.FetchOCSP(ctx, n.ocspHTTP, info.Cert, issuer)
 			if err != nil {
 				log.Printf("payload %s REJECTED from %s: %v; signer certificate: %s", id.Short(), from, err, chain.DescribeCert(info.Cert))
+				if errors.Is(err, chain.ErrOCSPUnavailable) {
+					return remote.SubmitResult{}, err // 503: the same request can be retried
+				}
 				return remote.SubmitResult{}, ErrBadPayload{err}
 			}
 			e.OCSP = base64.StdEncoding.EncodeToString(raw)

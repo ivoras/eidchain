@@ -164,7 +164,7 @@ async function viewTx(id) {
       ["time", time(t.time)],
       ["signing time", t.claimedSigningTime ? `${time(t.claimedSigningTime)} (claimed by the signer)` : "–"],
       ["hash function", t.hashFunction],
-      ["payload", bytes(t.payload.length)],
+      ["payload", bytes(new TextEncoder().encode(t.payload).length)],
       ["signature", t.signatureBytes ? `CAdES-B-B, ${bytes(t.signatureBytes)}` : "–"],
     ])),
     t.certificate ? certCard(t.certificate) : null,
@@ -182,8 +182,8 @@ async function viewTx(id) {
   );
 }
 
-async function viewMessages() {
-  const msgs = await api("messages?limit=100");
+async function viewMessages(before) {
+  const { messages: msgs, older } = await api(`explorer/messages${before ? `?before=${before}` : ""}`);
   document.title = "eidchain – messages";
   show(
     heading("explorer", "Messages.", "Every message is a JSON record signed with an eID card."),
@@ -193,6 +193,9 @@ async function viewMessages() {
         h("div", { class: "text" }, messageText(m.payload)),
         h("div", { class: "meta" }, `${m.subject} · ${time(m.time)} · `, txLink(m.id, "details")))))
       : h("div", { class: "card empty" }, "No messages yet."),
+    h("div", { class: "pager" },
+      older ? link(`#/messages/${older}`, "Older messages", { class: "btn" }) : null,
+      before ? link("#/messages", "Latest messages", { class: "btn" }) : null),
   );
 }
 
@@ -229,7 +232,7 @@ async function viewNode() {
     h("div", { class: "stats" }, stat("height", info.height), stat("pending messages", info.pending), stat("pending rotations", info.pendingRotations), stat("authorities", info.authorities.length)),
     h("div", { class: "card" }, h("h2", {}, "Chain"), kv([
       ["genesis hash", h("span", { class: "hash" }, info.genesisHash)],
-      ["head", blockLink(info.head, info.height ? `#${info.height}` : "genesis")],
+      ["head", info.height ? blockLink(info.head, `#${info.height}`) : "genesis (no blocks yet)"],
       ["created", time(g.created)],
       ["block interval", `${info.blockIntervalSeconds / 60} min, only when messages are waiting`],
       ["next block", time(info.nextBlockAt)],
@@ -266,7 +269,7 @@ async function route() {
       case "": case "blocks": return await viewBlocks(Number(arg) || 0);
       case "block": return await viewBlock(arg);
       case "tx": return await viewTx(arg);
-      case "messages": return await viewMessages();
+      case "messages": return await viewMessages(Number(arg) || 0);
       case "authorities": return await viewAuthorities();
       case "authority": return await viewAuthorities(arg);
       case "node": return await viewNode();

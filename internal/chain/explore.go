@@ -23,6 +23,21 @@ func (s *Store) Window(before uint64, n int) []*Block {
 	return out
 }
 
+// AllHashes lists every stored block and every payload on the canonical chain.
+func (s *Store) AllHashes() (blocks, payloads []Hash) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for h, e := range s.blocks {
+		if e.block != nil {
+			blocks = append(blocks, h)
+		}
+	}
+	for id := range s.ids {
+		payloads = append(payloads, id)
+	}
+	return blocks, payloads
+}
+
 // BlockAt returns the canonical block at a height (>= 1).
 func (s *Store) BlockAt(height uint64) (*Block, bool) {
 	s.mu.RLock()

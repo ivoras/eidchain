@@ -354,8 +354,9 @@ All under `/api/v1`, JSON, CORS open. There is no authentication: every write ne
 | `GET /blocks?from=H&limit=N` | Canonical blocks from height `H` (limit up to 200; may return fewer, up to about 32 MiB) |
 | `GET /blocks/{hash}` | Any stored block |
 | `POST /blocks` | Push a block (gossip); answers `added`, `known`, or `unknown-parent` |
-| `POST /payloads` | Submit `{"payload": "...", "signature": "<base64 CAdES>"}`. Checks the signature, the certificate chain, the payload's `chain` field and OCSP; 422 on rejection |
-| `GET /messages?limit=N` | Pending and recent confirmed records with their signer, for the web app |
+| `POST /payloads` | Submit `{"payload": "...", "signature": "<base64 CAdES>"}`. Checks the signature, the certificate chain, the payload's `chain` field and OCSP; 422 on rejection, 503 if the OCSP responder is unreachable or the pool is full (safe to retry) |
+| `POST /check-cert` | Whether `{"certificate": "<base64 DER>"}` could sign here, so the web app can say so before the PIN |
+| `GET /messages?limit=N` | Pending and recent confirmed records with their signer, for the web app (at most `N`, pending first) |
 | `GET /authorities` | Current authority key IDs, rotation sequence and quorum |
 | `GET /peers`, `POST /peers` | The peers this node shares (itself, public and healthy ones); announce a node's own address (`{"url": "..."}`), which is verified before it is added |
 | `GET /rotations`, `POST /rotations` | Pending rotation proposals; submit or add approvals |
@@ -363,7 +364,8 @@ All under `/api/v1`, JSON, CORS open. There is no authentication: every write ne
 | `GET /explorer/block/{height or hash}` | A block with its messages, rotations, neighbours and confirmations |
 | `GET /explorer/tx/{id}` | A message (its id is a hash of the payload and the signer's certificate): payload, signer certificate, CAdES and OCSP details, and where it is (or that it is pending) |
 | `GET /explorer/authorities` | Current keys, rotation history, pending proposals and which keys this node holds |
-| `GET /explorer/search?q=` | Resolves a height, block hash, message id or authority key id |
+| `GET /explorer/messages?before=H` | Messages from 20 blocks, newest first, with a cursor for older pages |
+| `GET /explorer/search?q=` | Resolves a height, or a block hash, message id or authority key id, also in the shortened form the pages show |
 
 ## The example web app and explorer
 
@@ -395,7 +397,7 @@ journalctl -u eidchain -f               # logs
 
 The repository copies in `deploy/` are the source of truth; `install.sh` copies them to `/etc/systemd/system/` and `/etc/nginx/sites-available/`. The nginx file also contains the lines certbot manages (certificate paths), so keep it in sync if certbot changes the live file. To change the port, edit it in both the unit and the nginx file.
 
-The node and its API are public, with no authentication. The nginx config limits each client to 30 POSTs a minute (burst 30), caps request bodies at 300 KiB (9 MiB for pushed blocks), and sends HSTS and a CSP. The node has no limits of its own, so do not expose its port directly. OCSP is `required`, so submissions fail unless the signer's OCSP responder answers.
+The node and its API are public, with no authentication. The nginx config limits each client to 30 POSTs a minute (burst 30), caps request bodies at 300 KiB (9 MiB for pushed blocks), and sends HSTS and a CSP. The node has no limits of its own, so do not expose its port directly. OCSP is `required`, so submissions wait until the signer's OCSP responder answers; if it is down the web app keeps the signature and retries without another PIN.
 
 ## Development
 

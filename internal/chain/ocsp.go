@@ -20,6 +20,10 @@ import (
 // not let a stale "good" outlive a revocation.
 const maxOCSPAge = 48 * time.Hour
 
+// ErrOCSPUnavailable means no responder gave a usable answer: a temporary problem
+// on someone else's side, as opposed to a certificate that was checked and failed.
+var ErrOCSPUnavailable = errors.New("the OCSP responder could not be reached")
+
 // FetchOCSP asks the certificate's OCSP responder (from its AIA extension)
 // whether it is still good, and returns the verified raw response.
 func FetchOCSP(ctx context.Context, client *http.Client, cert, issuer *x509.Certificate) ([]byte, error) {
@@ -30,7 +34,7 @@ func FetchOCSP(ctx context.Context, client *http.Client, cert, issuer *x509.Cert
 	if err != nil {
 		return nil, err
 	}
-	var lastErr error
+	var lastErr, rejected error
 	for _, url := range cert.OCSPServer {
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(req))
 		if err != nil {
@@ -56,13 +60,16 @@ func FetchOCSP(ctx context.Context, client *http.Client, cert, issuer *x509.Cert
 		}
 		if err := VerifyOCSP(body, cert, issuer, time.Now()); err != nil {
 			log.Printf("ocsp: %s for serial %s: response rejected: %v", url, cert.SerialNumber.Text(16), err)
-			lastErr = fmt.Errorf("OCSP responder %s: %w", url, err)
+			rejected = fmt.Errorf("OCSP responder %s: %w", url, err)
 			continue
 		}
 		log.Printf("ocsp: %s: good, %d bytes, %s", url, len(body), time.Since(start).Round(time.Millisecond)) // success: no serial (PII)
 		return body, nil
 	}
-	return nil, fmt.Errorf("OCSP check failed: %w", lastErr)
+	if rejected != nil {
+		return nil, fmt.Errorf("OCSP check failed: %w", rejected)
+	}
+	return nil, fmt.Errorf("%w: %v", ErrOCSPUnavailable, lastErr)
 }
 
 // VerifyOCSP checks a raw OCSP response offline: signed by the issuer (or its

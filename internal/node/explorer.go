@@ -174,6 +174,7 @@ func (n *Node) registerExplorer(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/explorer/tx/{id}", n.handleExplorerTx)
 	mux.HandleFunc("GET /api/v1/explorer/authorities", n.handleExplorerAuthorities)
 	mux.HandleFunc("GET /api/v1/explorer/search", n.handleExplorerSearch)
+	mux.HandleFunc("GET /api/v1/explorer/messages", n.handleExplorerMessages)
 }
 
 func (n *Node) handleExplorerBlocks(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +194,26 @@ func (n *Node) handleExplorerBlocks(w http.ResponseWriter, r *http.Request) {
 	}
 	head, height := n.store.Head()
 	writeJSON(w, 200, map[string]any{"blocks": out, "older": older, "height": height, "head": head})
+}
+
+// handleExplorerMessages pages through messages block by block, newest first.
+// Pending messages come with the first page.
+func (n *Node) handleExplorerMessages(w http.ResponseWriter, r *http.Request) {
+	const blocksPerPage = 20
+	before, _ := strconv.ParseUint(r.URL.Query().Get("before"), 10, 64)
+	out := []Message{}
+	if before == 0 {
+		out = n.pendingMessages()
+	}
+	blocks := n.store.Window(before, blocksPerPage)
+	for _, b := range blocks {
+		out = append(out, n.blockMessages(b)...)
+	}
+	var older uint64
+	if len(blocks) == blocksPerPage && blocks[len(blocks)-1].Header.Height > 1 {
+		older = blocks[len(blocks)-1].Header.Height
+	}
+	writeJSON(w, 200, map[string]any{"messages": out, "older": older})
 }
 
 // resolveBlock finds a block by decimal height or by 64-hex hash.
@@ -312,6 +333,10 @@ func (n *Node) handleExplorerSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h, err := strconv.ParseUint(q, 10, 64); err == nil {
+		if h == 0 {
+			found("node", "")
+			return
+		}
 		if _, ok := n.store.BlockAt(h); ok {
 			found("block", q)
 			return
@@ -342,5 +367,57 @@ func (n *Node) handleExplorerSearch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	switch hits := n.searchShort(q); {
+	case len(hits) == 1:
+		found(hits[0].kind, hits[0].ref)
+		return
+	case len(hits) > 1:
+		writeErr(w, 404, errors.New("that matches more than one item: give more of the hash"))
+		return
+	}
 	writeErr(w, 404, errors.New("nothing matches: try a block height, a block hash, a message id or an authority key id"))
+}
+
+type searchHit struct{ kind, ref string }
+
+// searchShort resolves the shortened hashes the UI displays: "1a96878e…45a82", or
+// a bare prefix of at least 8 hex digits.
+func (n *Node) searchShort(q string) []searchHit {
+	prefix, suffix, _ := strings.Cut(strings.ReplaceAll(q, "...", "…"), "…")
+	if len(prefix) < 8 {
+		return nil
+	}
+	seen := map[searchHit]bool{}
+	var hits []searchHit
+	try := func(kind, full string) {
+		if h := (searchHit{kind, full}); strings.HasPrefix(full, prefix) && strings.HasSuffix(full, suffix) && !seen[h] {
+			seen[h] = true
+			hits = append(hits, h)
+		}
+	}
+	blocks, payloads := n.store.AllHashes()
+	for _, h := range blocks {
+		try("block", h.String())
+	}
+	for _, h := range payloads {
+		try("tx", h.String())
+	}
+	for _, it := range n.pool.Snapshot() {
+		try("tx", it.Entry.ID().String())
+	}
+	for _, id := range n.store.HeadState().IDs {
+		try("authority", id)
+	}
+	for _, e := range n.store.RotationHistory() {
+		try("authority", e.Rotation.Change.Old)
+	}
+	if strings.HasPrefix(n.store.P.GenesisHash.String(), prefix) {
+		try("node", n.store.P.GenesisHash.String())
+	}
+	for i := range hits {
+		if hits[i].kind == "node" {
+			hits[i].ref = ""
+		}
+	}
+	return hits
 }
