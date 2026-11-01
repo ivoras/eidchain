@@ -373,7 +373,7 @@ All under `/api/v1`, JSON, CORS open. There is no authentication: every write ne
 - **Explorer** (`explorer.html`, hash-routed): `#/blocks` (latest blocks, paged), `#/block/<height or hash>`, `#/messages`, `#/tx/<message id>` (the message, the signer's certificate, the CAdES details and the stored OCSP result, and the payload verbatim), `#/authorities` (current keys, rotation history, proposals), `#/node` (genesis hash, trusted CAs, block timing) and a search box in the nav bar that takes a height, block hash, message id or authority key id. Lists show only the signer's common name; the detail page shows the certificate's subject fields except `serialNumber`, the personal ID number. That only limits what the API displays: the certificate itself is in the CAdES signature in every block, so the number stays readable from the raw block, and nothing written to the chain can be erased. The web app tells users this before they sign.
 - **Nav bar and ticker** (`nav.js`): one small module builds the bar for both the website and the app, highlights the current page, and shows the chain's genesis message as a scrolling ticker.
 
-The look (`site.css`) is shared by the whole website and the app: a pale periwinkle canvas, near-black type, lime and electric-blue accents, pill buttons, uppercase mono labels, automatic dark mode and a reduced-motion setting. It uses system fonts only and no images, so the pages run under a strict CSP with no inline scripts or styles.
+The look (`site.css`) is shared by the whole website and the app: a pale periwinkle canvas, near-black type, lime and electric-blue accents, pill buttons, uppercase mono labels, automatic dark mode and a reduced-motion setting. It uses system fonts only and no images, so the pages run under a strict CSP with no inline scripts or styles (sent by the node for the app, and by `deploy/nginx-eidchain.conf` for the website).
 
 The shared files live in `www/` (`site.css`, `nav.js`, `signer/{webeid-client,der,cades}.js`) and are copied into the app by `scripts/sync-webapp.sh`; run it after changing them and rebuild, so the embedded copies match. A test checks that every asset the embedded pages reference is in the binary.
 
@@ -395,7 +395,7 @@ journalctl -u eidchain -f               # logs
 
 The repository copies in `deploy/` are the source of truth; `install.sh` copies them to `/etc/systemd/system/` and `/etc/nginx/sites-available/`. The nginx file also contains the lines certbot manages (certificate paths), so keep it in sync if certbot changes the live file. To change the port, edit it in both the unit and the nginx file.
 
-The node and its API are public: there is no authentication, rate limiting or per-IP control (see [Limitations](#limitations)). OCSP is `required`, so submissions fail unless the signer's OCSP responder answers.
+The node and its API are public, with no authentication. The nginx config limits each client to 30 POSTs a minute (burst 30), caps request bodies at 300 KiB (9 MiB for pushed blocks), and sends HSTS and a CSP. The node has no limits of its own, so do not expose its port directly. OCSP is `required`, so submissions fail unless the signer's OCSP responder answers.
 
 ## Development
 
@@ -450,7 +450,7 @@ If a key ever does get pushed, treat it as compromised: rotate it (see [Key rota
 - **Only replacement rotations.** The authority count stays constant; adding or removing authorities is not implemented.
 - **Peer discovery is minimal.** Nodes learn peers from the ones they already have (see [Peers and peer exchange](#peers-and-peer-exchange)), but there is no bootstrap list or DNS discovery: a new node needs at least one peer address to start from.
 - **Whole chain in memory.** Fine for a PoC.
-- **No access control or rate limiting** on the API; the pending pool is capped at 5000 payloads.
+- **No access control, and rate limiting only in nginx.** The pending pool is capped at 5000 payloads, but one card can fill it.
 
 ## License
 

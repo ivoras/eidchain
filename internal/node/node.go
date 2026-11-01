@@ -144,7 +144,11 @@ func (n *Node) Run(ctx context.Context) error {
 	for _, c := range n.store.P.Trust.Certificates() {
 		log.Printf("trust anchor: %q ski=%x valid until %s", chain.CertName(c), c.SubjectKeyId, c.NotAfter.Format("2006-01-02"))
 	}
-	srv := &http.Server{Addr: n.opt.Listen, Handler: n.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{
+		Addr: n.opt.Listen, Handler: n.Handler(), ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout: time.Minute, IdleTimeout: 2 * time.Minute,
+		WriteTimeout: 2 * time.Minute, // payload submission waits for the OCSP responder
+	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	go n.produceLoop(ctx)

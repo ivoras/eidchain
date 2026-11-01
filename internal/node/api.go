@@ -48,6 +48,7 @@ func decode(w http.ResponseWriter, r *http.Request, limit int64, v any) bool {
 // no accounts, and every write needs an eID or authority signature anyway.
 func cors(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
