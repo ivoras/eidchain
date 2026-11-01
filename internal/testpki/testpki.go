@@ -93,6 +93,23 @@ func (p *PKI) LeafSubject(t testing.TB, subject pkix.Name) Leaf {
 	return Leaf{c, key}
 }
 
+// OCSPResponder issues a delegated OCSP responder certificate.
+func (p *PKI) OCSPResponder(t testing.TB) Leaf {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "Test OCSP"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(48 * time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, p.interCert, key.Public(), p.interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := x509.ParseCertificate(der)
+	return Leaf{c, key}
+}
+
 // CadesSign builds a detached CAdES-B-B signature, mirroring www/signer/cades.js.
 func enc(tag byte, parts ...[]byte) []byte {
 	var body []byte

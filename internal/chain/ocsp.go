@@ -9,13 +9,16 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/ocsp"
 )
 
-// maxOCSPAge bounds how old a response without nextUpdate may be.
-const maxOCSPAge = 24 * time.Hour
+// maxOCSPAge bounds how old a response may be, whatever its nextUpdate says.
+// Responses are also accepted from clients and peers, so a long nextUpdate must
+// not let a stale "good" outlive a revocation.
+const maxOCSPAge = 48 * time.Hour
 
 // FetchOCSP asks the certificate's OCSP responder (from its AIA extension)
 // whether it is still good, and returns the verified raw response.
@@ -69,6 +72,9 @@ func VerifyOCSP(raw []byte, cert, issuer *x509.Certificate, now time.Time) error
 	if err != nil {
 		return fmt.Errorf("OCSP response: %w", err)
 	}
+	if err := checkResponder(r, issuer, now); err != nil {
+		return err
+	}
 	switch r.Status {
 	case ocsp.Good:
 	case ocsp.Revoked:
@@ -79,12 +85,28 @@ func VerifyOCSP(raw []byte, cert, issuer *x509.Certificate, now time.Time) error
 	if r.ThisUpdate.After(now.Add(5 * time.Minute)) {
 		return errors.New("OCSP response is from the future")
 	}
-	if !r.NextUpdate.IsZero() {
-		if now.After(r.NextUpdate) {
-			return errors.New("OCSP response has expired")
-		}
-	} else if now.Sub(r.ThisUpdate) > maxOCSPAge {
+	if !r.NextUpdate.IsZero() && now.After(r.NextUpdate) {
+		return errors.New("OCSP response has expired")
+	}
+	if now.Sub(r.ThisUpdate) > maxOCSPAge {
 		return errors.New("OCSP response is too old")
+	}
+	return nil
+}
+
+// checkResponder enforces RFC 6960 4.2.2.2, which x/crypto/ocsp leaves to the
+// caller: the library accepts any certificate the issuer signed as a responder,
+// so without this a cardholder could sign "good" for their own revoked card.
+func checkResponder(r *ocsp.Response, issuer *x509.Certificate, now time.Time) error {
+	c := r.Certificate
+	if c == nil || c.Equal(issuer) {
+		return nil // signed by the issuer itself
+	}
+	if !slices.Contains(c.ExtKeyUsage, x509.ExtKeyUsageOCSPSigning) {
+		return errors.New("OCSP responder certificate is not authorised for OCSP signing")
+	}
+	if now.Before(c.NotBefore) || now.After(c.NotAfter) {
+		return errors.New("OCSP responder certificate is outside its validity period")
 	}
 	return nil
 }

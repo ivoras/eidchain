@@ -100,7 +100,9 @@ func InspectOCSP(raw []byte, cert, issuer *x509.Certificate) (OCSPInfo, error) {
 	var err error
 	if issuer != nil {
 		if r, err = ocsp.ParseResponseForCert(raw, cert, issuer); err == nil {
-			info.SignatureVerified = true
+			// A response is only "verified" if its signer may answer for this CA,
+			// judged when it was produced: stored responses outlive their responders.
+			info.SignatureVerified = checkResponder(r, issuer, r.ProducedAt) == nil
 		}
 	}
 	if r == nil {
