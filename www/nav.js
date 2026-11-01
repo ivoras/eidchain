@@ -35,8 +35,10 @@ function build(mode) {
     list.append(el("li", {}, a));
     return [a, active];
   });
-  // The app is often mounted under the website (/chain/): offer the way back.
+  // The app is often mounted under the website (/chain/): offer the signer, which
+  // only the website serves, and the way back.
   if (mode === "app" && location.pathname.startsWith("/chain/")) {
+    list.append(el("li", {}, el("a", { href: "../signer/" }, "signer")));
     list.append(el("li", {}, el("a", { href: "../" }, "website")));
   }
   const nav = el("nav", { class: "nav", "aria-label": "Main" },
