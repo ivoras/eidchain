@@ -4,12 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>eidchain – prijava</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem}</style>
+<link rel="stylesheet" href="/site.css">
 </head>
-<body>
-<h1>Prijava uspješna</h1>
-<p>Your Croatian eID authentication certificate was accepted by the server.</p>
-<p><a href="/login/whoami">Show the certificate details the server saw</a></p>
-<p><a href="/">Back</a></p>
+<body data-nav="site" data-ticker="your eID card was accepted as a TLS client certificate">
+<main class="wrap">
+  <section class="hero">
+    <p class="eyebrow">card login</p>
+    <h1>Prijava <em>uspješna.</em></h1>
+    <p class="lead">Your Croatian eID authentication certificate was accepted by the server.</p>
+  </section>
+  <div class="card">
+    <p>The server verified the certificate against the AKD CAs. This is what it saw:</p>
+    <p><a class="btn primary" href="/login/whoami">Show the certificate details</a></p>
+  </div>
+</main>
+<script type="module" src="/nav.js"></script>
 </body>
 </html>

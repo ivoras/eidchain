@@ -21,7 +21,9 @@ The repository also holds the website that runs at `eidchain.ivoras.net` (`www/`
 - **OCSP at submission.** When a payload is submitted, the node asks the signer certificate's OCSP responder and fails closed. The signed OCSP response is stored in the block next to the payload so anyone can audit it later (it is committed to by the block hash but is *not* a block validity rule, because revocation answers change over time).
 - **Gossip and pull.** Nodes push new blocks, payloads and rotation approvals to configured peers and also pull from them periodically. `eidchain pull` downloads a chain from a running node with `docker pull` semantics: you name the chain by its genesis hash, everything is verified locally from the genesis, and a repeated pull fetches only what is new.
 - **Block production every 10 minutes.** If any payloads are waiting, an authority node cuts a block on every 10-minute wall-clock boundary, regardless of how many payloads there are.
-- **Example web app.** Anyone can type a message, sign it with their eID card in the browser, and add it to the next block. No accounts.
+- **Example web app and explorer.** Anyone can type a message, sign it with their eID card in the browser, and add it to the next block. No accounts. A built-in explorer shows blocks, messages (with the signer's certificate and OCSP result), authority keys and rotations, with search, behind a shared nav bar.
+- **Strict JSON.** Duplicate keys and case-variant field names are refused everywhere, so a document cannot be read two ways.
+- **PII-free logs.** Success paths never log signer names, certificate serials or client addresses; error handlers do, because that is what debugging needs.
 - **Genesis from a headline.** A new chain is started with `eidchain genesis`; the genesis block holds a free-text message, and the PoC chain's genesis records a BBC News headline from 1 November 2026.
 
 ## Quick start
@@ -109,10 +111,33 @@ The **genesis hash** (SHA-256 over the canonical JSON) is the chain's identity. 
 - `payloadsRoot` is an RFC 6962 style Merkle tree over leaves that commit to the payload text, the signature and the OCSP response.
 - A block must contain at least one payload or rotation.
 
+### Genesis block and block chaining
+
+**The genesis is not a block.** It is a separate document (see the table above) with no `prev`, no `height`, no signer and no signature. It is trusted for one reason only: you give a node its hash (`--genesis-hash`, `EIDCHAIN_GENESIS_HASH` or `config.json`), and the node refuses any chain whose genesis hashes differently. It hashes as SHA-256 over `"eidchain/genesis/v1\n"` plus its canonical JSON. In the code it plays the part of a block at height 0 whose hash is the genesis hash.
+
+**Block 1 points back at it.** Its `header.prev` is the genesis hash. On the PoC chain:
+
+```
+genesis                      block 1                              block 2
+hash  G ◄────────────────── prev  = G                            prev  = H1
+(no prev, no signature)      hash  H1 = SHA-256(header 1) ◄──────  hash  H2 = SHA-256(header 2)
+                             payloadsRoot ── Merkle ── payload entries
+                             signature = ECDSA(authority key, H1)
+```
+
+Each later block's `prev` is the hash of its parent. A block's hash covers its **header only**, but the header commits to everything else: `payloadsRoot` and `rotationsRoot` are Merkle roots over the body, and `signer` and `height` and `time` are in the header. So changing any message in an old block changes that block's Merkle root, hence its header, hence its hash, which no longer matches the `prev` of its child, and the whole chain after it breaks. Rewriting history needs a new valid signature on every block from that point on.
+
+**Why storing the signature inside the block is not circular.** The `signature` field and the `payloads` array are outside the hash. The authority signs the hash, and anyone verifies by recomputing the hash from the header and checking `ECDSA(publicKey, hash, signature)`. The public key is the one the *parent's* authority state lists for `header.signer`, which is how rotations stay verifiable. ECDSA signatures are randomised, so one header could carry several valid signatures from the same key; the block hash is the same for all of them, so nodes treat them as one block.
+
+**The hash comes from the parsed header, not from the bytes received.** The header is re-encoded canonically (fixed field order, compact, no HTML escaping) before hashing, so JSON key order, whitespace and string escapes in a file or request do not matter and cannot forge anything. To rule out documents that different JSON parsers might read differently, every JSON input is decoded strictly: duplicate object keys, field names that match only case-insensitively (`"HEIGHT"`), unknown fields and trailing data are all refused (`chain.StrictUnmarshal`, used for the genesis file, stored blocks, API request bodies, blocks fetched from peers and rotation files). Block files on disk are written by the node from the parsed block, so they are always in canonical form.
+
+**Forks.** Two blocks can have the same parent. Both are stored; the canonical chain is the highest one, ties broken by the lowest hash (see [Fork choice](#fork-choice)). `eidchain verify` replays the canonical chain from the genesis: for each block it recomputes the hash and Merkle roots, checks the link to its parent, applies the signer rules to the parent's authority state, and verifies every message.
+
 ### Block validation (consensus rules)
 
 A node accepts a block only if all of these hold:
 
+0. The JSON it arrived in is unambiguous (no duplicate keys, exact-case field names, no unknown fields).
 1. It builds on a known parent, height is parent + 1, and `time` is not before the parent's and not more than 5 minutes in the future.
 2. The signer is an authority **in the parent's authority state** and did not sign any of the previous `floor(N/2)` blocks. The block signature is valid.
 3. `payloadCount`, `rotationCount`, `payloadsRoot` and `rotationsRoot` match the body.
@@ -175,6 +200,7 @@ eidchain submit   [flags] PAYLOAD SIG     submit a signed record
 eidchain rotate   create|sign|submit      rotate an authority key
 eidchain verify   [flags]                 re-verify the local chain from the genesis
 eidchain info     [flags] [SERVER-URL]    show a node's status
+eidchain cert     [flags] CERT-FILE       inspect an eID certificate and check it against the chain's CAs
 ```
 
 Flags may come before or after positional arguments. `-h` lists a command's flags.
@@ -221,6 +247,10 @@ Generates `--authorities` new keys (default 3, or none if you pass existing publ
 ### `submit`
 
 `eidchain submit [--server URL] PAYLOAD-FILE SIGNATURE-FILE` sends a record that you signed elsewhere, for example with the `/signer/` page (the signature file may be DER, PEM or Base64 `.p7s`). The payload file's exact bytes are what the signature covers.
+
+### `cert`
+
+`eidchain cert [--data DIR] CERT-FILE` prints a certificate (PEM or DER; the `/signer/` page's `.signer.pem` download works) and says whether the chain in the data directory would accept it for payload signatures. If not, it names the CA that is missing and where its certificate is published. This is how the newer cards' CA (HRIDCA 2025) was found.
 
 ## Configuration file
 
@@ -270,12 +300,23 @@ All under `/api/v1`, JSON, CORS open. There is no authentication: every write ne
 | `GET /messages?limit=N` | Pending and recent confirmed records with their signer, for the web app |
 | `GET /authorities` | Current authority key IDs, rotation sequence and quorum |
 | `GET /rotations`, `POST /rotations` | Pending rotation proposals; submit or add approvals |
+| `GET /explorer/blocks?before=H&limit=N` | Block summaries, newest first, with a cursor for older pages |
+| `GET /explorer/block/{height or hash}` | A block with its messages, rotations, neighbours and confirmations |
+| `GET /explorer/tx/{id}` | A message: payload, signer certificate, CAdES and OCSP details, and where it is (or that it is pending) |
+| `GET /explorer/authorities` | Current keys, rotation history, pending proposals and which keys this node holds |
+| `GET /explorer/search?q=` | Resolves a height, block hash, message id or authority key id |
 
-## The example web app
+## The example web app and explorer
 
-`eidchain node` serves it at `/`. It reuses the browser modules of the `/signer/` page: the Web eID client, DER helpers and the CAdES-B-B builder. The page builds `{"type":"message","text":…,"created":…}`, hashes it, asks the card to sign the CAdES signed attributes (PIN2 prompt) and posts the result. It needs the [Web eID](https://web-eid.eu) extension and app, plus the card middleware, and an **HTTPS or localhost** origin.
+`eidchain node` serves both at `/` (embedded in the binary):
 
-After changing `www/signer/{webeid-client,der,cades}.js`, run `scripts/sync-webapp.sh` and rebuild, so the embedded copies match.
+- **Post a message** (`index.html`): type a message, sign it with your card, submit it. The page reuses the browser modules of the `/signer/` page (Web eID client, DER helpers, CAdES-B-B builder), builds `{"type":"message","text":…,"created":…}`, hashes it, asks the card to sign the CAdES signed attributes (PIN2 prompt) and posts the result. It needs the [Web eID](https://web-eid.eu) extension and app, plus the card middleware, and an **HTTPS or localhost** origin.
+- **Explorer** (`explorer.html`, hash-routed): `#/blocks` (latest blocks, paged), `#/block/<height or hash>`, `#/messages`, `#/tx/<message id>` (the message, the signer's certificate, the CAdES details and the stored OCSP result, and the payload verbatim), `#/authorities` (current keys, rotation history, proposals), `#/node` (genesis hash, trusted CAs, block timing) and a search box in the nav bar that takes a height, block hash, message id or authority key id. Lists show only the signer's common name; the detail page shows the certificate's subject fields.
+- **Nav bar and ticker** (`nav.js`): one small module builds the bar for both the website and the app, highlights the current page, and shows the chain's genesis message as a scrolling ticker.
+
+The look (`site.css`) is shared by the whole website and the app: a pale periwinkle canvas, near-black type, lime and electric-blue accents, pill buttons, uppercase mono labels, automatic dark mode and a reduced-motion setting. It uses system fonts only and no images, so the pages run under a strict CSP with no inline scripts or styles.
+
+The shared files live in `www/` (`site.css`, `nav.js`, `signer/{webeid-client,der,cades}.js`) and are copied into the app by `scripts/sync-webapp.sh`; run it after changing them and rebuild, so the embedded copies match. A test checks that every asset the embedded pages reference is in the binary.
 
 ## Deployment (systemd + nginx)
 
@@ -312,12 +353,12 @@ deploy/              systemd unit, nginx config, install script
 internal/chain/      data model, hashing, CAdES verification, validation, store, fork choice
 internal/node/       HTTP API, pools, block production, gossip, sync loop
 internal/remote/     node API client and chain synchronisation (used by pull and by nodes)
-internal/webapp/     embedded example web app
+internal/webapp/     embedded example web app and explorer (HTML, JS, CSS)
 internal/hrca/       embedded AKDCA Root, HRIDCA and HRIDCA 2025 certificates
 internal/config/     config.json
 internal/testpki/    test-only CA and CAdES builder
 genesis/             public genesis files
-www/                 the eidchain.ivoras.net website, including /signer/
+www/                 the eidchain.ivoras.net website, including /signer/, and the shared site.css and nav.js
 scripts/             helper scripts
 ```
 

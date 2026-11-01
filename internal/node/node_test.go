@@ -404,7 +404,16 @@ func TestExplorerAPI(t *testing.T) {
 	if rec = get(h, "/api/v1/explorer/block/99"); rec.Code != 404 {
 		t.Errorf("missing block: %d", rec.Code)
 	}
-	if rec = get(h, "/api/v1/explorer/authorities"); rec.Code != 200 || !strings.Contains(rec.Body.String(), keyID) {
+	rec = get(h, "/api/v1/explorer/authorities")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), keyID) {
 		t.Errorf("authorities: %d %s", rec.Code, rec.Body.String())
+	}
+	// The UI iterates these lists: they must be [] and never null.
+	var auth map[string]json.RawMessage
+	_ = json.Unmarshal(rec.Body.Bytes(), &auth)
+	for _, k := range []string{"history", "pending", "canSign", "current"} {
+		if string(auth[k]) == "null" || len(auth[k]) == 0 {
+			t.Errorf("authorities.%s is %q, want a JSON array", k, auth[k])
+		}
 	}
 }

@@ -184,3 +184,34 @@ func (p *Params) DiagnosePayload(e PayloadEntry) []string {
 
 // Join is a small helper for log lines.
 func Join(parts []string) string { return strings.Join(parts, "; ") }
+
+// SubjectName is the signer's display name: the certificate's common name. Lists
+// show only this, not the personal ID number that sits in the subject's serialNumber.
+func SubjectName(c *x509.Certificate) string {
+	if c.Subject.CommonName != "" {
+		return c.Subject.CommonName
+	}
+	return c.Subject.String()
+}
+
+var subjectLabels = map[string]string{
+	"2.5.4.3": "CN", "2.5.4.4": "surname", "2.5.4.42": "givenName", "2.5.4.5": "serialNumber",
+	"2.5.4.6": "C", "2.5.4.10": "O", "2.5.4.11": "OU", "2.5.4.97": "organizationIdentifier",
+}
+
+// SubjectDetail renders every subject attribute with a readable label, in place
+// of the raw OID hex that x509's own String() produces for the less common ones.
+func SubjectDetail(c *x509.Certificate) string {
+	var parts []string
+	for _, n := range c.Subject.Names {
+		label := subjectLabels[n.Type.String()]
+		if label == "" {
+			label = n.Type.String()
+		}
+		parts = append(parts, fmt.Sprintf("%s=%v", label, n.Value))
+	}
+	if len(parts) == 0 {
+		return c.Subject.String()
+	}
+	return strings.Join(parts, ", ")
+}

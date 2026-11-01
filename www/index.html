@@ -1,13 +1,28 @@
 <!doctype html>
-<html lang="hr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>eidchain</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem}</style>
+<link rel="stylesheet" href="/site.css">
 </head>
-<body>
-<h1>eidchain.ivoras.net</h1>
-<p>Public page. <a href="/login/">Sign in with your Croatian eID card</a> (TLS client certificate).</p>
+<body data-nav="site" data-ticker="eidchain is a proof-of-authority chain of messages signed with eID cards">
+<main class="wrap">
+  <section class="hero">
+    <p class="eyebrow">eidchain.ivoras.net</p>
+    <h1>Sign with your <em>eID card.</em> Keep it on a chain.</h1>
+    <p class="lead">Experiments with the Croatian eID smart card in the browser: sign documents, log in with a client certificate, and write messages to a small proof-of-authority blockchain.</p>
+  </section>
+
+  <section class="grid">
+    <a class="card" href="/signer/"><span class="arrow">→</span><p class="eyebrow">tool</p><h2>Document signer</h2><p>Sign any file with your card. It never leaves your browser. Get a CAdES signature in several formats.</p></a>
+    <a class="card" href="/chain/"><span class="arrow">→</span><p class="eyebrow">chain</p><h2>Write on the chain</h2><p>Sign a message with your card and add it to the next block.</p></a>
+    <a class="card" href="/chain/explorer.html#/blocks"><span class="arrow">→</span><p class="eyebrow">chain</p><h2>Explorer</h2><p>Browse blocks, messages and the authority keys that sign them.</p></a>
+    <a class="card" href="/login/"><span class="arrow">→</span><p class="eyebrow">test</p><h2>Card login</h2><p>Open a page that needs a TLS client certificate from your eID card.</p></a>
+  </section>
+
+  <p class="foot">Needs a card reader, the <a href="https://web-eid.eu">Web eID</a> extension and the card middleware. Source: <code>/srv/eidchain</code>.</p>
+</main>
+<script type="module" src="/nav.js"></script>
 </body>
 </html>

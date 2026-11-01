@@ -101,7 +101,7 @@ func preview(payload string) string {
 
 func certToView(c *x509.Certificate) *certView {
 	fp := sha256.Sum256(c.Raw)
-	return &certView{Subject: c.Subject.String(), Issuer: chain.CertName2(c.Issuer.CommonName, c.Issuer.Organization), Serial: c.SerialNumber.Text(16),
+	return &certView{Subject: chain.SubjectDetail(c), Issuer: chain.CertName2(c.Issuer.CommonName, c.Issuer.Organization), Serial: c.SerialNumber.Text(16),
 		NotBefore: c.NotBefore.Unix(), NotAfter: c.NotAfter.Unix(), SHA256: hexOf(fp[:]), KeyUsage: chain.KeyUsageNames(c),
 		SigAlg: c.SignatureAlgorithm.String(), OCSPServer: c.OCSPServer}
 }
@@ -274,6 +274,10 @@ func (n *Node) handleExplorerAuthorities(w http.ResponseWriter, r *http.Request)
 		hist = append(hist, ev)
 	}
 	st := n.store.HeadState()
+	pending := n.rots.List()
+	if pending == nil {
+		pending = []chain.Rotation{} // JSON [] rather than null
+	}
 	writeJSON(w, 200, map[string]any{
 		"genesis":  n.store.P.Genesis.Authorities,
 		"current":  st.IDs,
@@ -281,7 +285,7 @@ func (n *Node) handleExplorerAuthorities(w http.ResponseWriter, r *http.Request)
 		"quorum":   n.store.P.Rules.RotationQuorum,
 		"window":   n.store.P.RecentSignerWindow(),
 		"history":  hist,
-		"pending":  n.rots.List(),
+		"pending":  pending,
 		"canSign":  n.localKeyIDs(),
 		"rotation": n.store.P.Rules,
 	})

@@ -1,6 +1,7 @@
 import { getSigningCertificate, sign, onTrace, WebEidError } from "./webeid-client.js";
 import { b64ToBytes, bytesToB64, parseCertificate, ecdsaToDer } from "./der.js";
 import { buildSignedAttributes, buildCms } from "./cades.js";
+import { setTicker } from "./nav.js";
 
 const $ = (id) => document.getElementById(id);
 const HASH_PREFERENCE = ["SHA-256", "SHA-384", "SHA-512"];
@@ -43,10 +44,23 @@ async function refresh() {
     const info = await getJSON("api/v1/info");
     maxBytes = info.maxPayloadBytes;
     $("chain").textContent = `“${info.message}”`;
-    const next = info.pending > 0 ? `next block ${fmtTime(info.nextBlockAt)}` : "a block is cut every " + info.blockIntervalSeconds / 60 + " min when messages are waiting";
-    $("stats").textContent = `chain ${info.genesisHash.slice(0, 12)}… · height ${info.height} · ${info.pending} pending · ${next}`;
+    setTicker(info.message);
+    const next = info.pending > 0 ? fmtTime(info.nextBlockAt) : `every ${info.blockIntervalSeconds / 60} min`;
+    const stats = $("stats");
+    stats.replaceChildren();
+    for (const [label, value] of [["blocks", info.height], ["pending", info.pending], ["next block", next], ["authorities", info.authorities.length]]) {
+      const box = document.createElement("div");
+      box.className = "stat";
+      const l = document.createElement("span");
+      l.className = "label";
+      l.textContent = label;
+      const b = document.createElement("b");
+      b.textContent = value;
+      box.append(l, b);
+      stats.append(box);
+    }
     updateCount();
-    const msgs = await getJSON("api/v1/messages?limit=50");
+    const msgs = await getJSON("api/v1/messages?limit=10");
     const ul = $("messages");
     ul.replaceChildren();
     for (const m of msgs) {
@@ -61,7 +75,10 @@ async function refresh() {
       body.textContent = text;
       const meta = document.createElement("div");
       meta.className = "meta";
-      meta.textContent = `${m.subject} · ${fmtTime(m.time)}${m.ocsp ? " · OCSP checked" : ""}`;
+      const link = document.createElement("a");
+      link.href = `explorer.html#/tx/${m.id}`;
+      link.textContent = "details";
+      meta.append(`${m.subject} · ${fmtTime(m.time)}${m.ocsp ? " · OCSP checked" : ""} · `, link);
       li.append(badge, body, meta);
       ul.append(li);
     }

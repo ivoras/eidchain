@@ -56,7 +56,7 @@ func (p *Params) VerifyPayload(e PayloadEntry, at time.Time) (*PayloadInfo, erro
 	return &PayloadInfo{
 		ID:          e.ID(),
 		Cert:        s.Cert,
-		Subject:     s.Cert.Subject.String(),
+		Subject:     SubjectName(s.Cert),
 		Serial:      s.Cert.SerialNumber.Text(16),
 		SigningTime: s.SigningTime,
 	}, nil
