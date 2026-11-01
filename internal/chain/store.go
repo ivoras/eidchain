@@ -83,7 +83,7 @@ func Open(dir string, expected Hash) (*Store, error) {
 			return nil, err
 		}
 		var b Block
-		if err := strictUnmarshal(raw, &b); err != nil {
+		if err := StrictUnmarshal(raw, &b); err != nil {
 			log.Printf("store: skipping %s: %v", filepath.Base(path), err)
 			continue
 		}

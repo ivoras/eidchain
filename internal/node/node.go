@@ -213,8 +213,9 @@ func (n *Node) SubmitPayload(ctx context.Context, e chain.PayloadEntry, from str
 		return remote.SubmitResult{Status: "known", ID: id}, nil
 	}
 	n.meta.Store(id, msgMeta{info.Subject, info.Serial})
-	log.Printf("payload %s accepted from %s (%d bytes, ocsp=%v): signer %s, issuer %q, serial %s",
-		id.Short(), from, len(e.Payload), e.OCSP != "", info.Subject, info.Cert.Issuer.CommonName, info.Serial)
+	// Success path: no signer name, serial number or client address (PII) here;
+	// the rejection paths above keep them because they exist for debugging.
+	log.Printf("payload %s accepted (%d bytes, ocsp=%v, issuer %q)", id.Short(), len(e.Payload), e.OCSP != "", info.Cert.Issuer.CommonName)
 	n.broadcastPayload(e)
 	return remote.SubmitResult{Status: "accepted", ID: id, OCSP: e.OCSP != ""}, nil
 }

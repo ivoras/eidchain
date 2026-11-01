@@ -1,7 +1,6 @@
 package node
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -27,16 +26,14 @@ func writeErr(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
-// decode reads a size-limited JSON body, rejecting unknown fields.
+// decode reads a size-limited JSON body with the strict rules of chain.StrictUnmarshal.
 func decode(w http.ResponseWriter, r *http.Request, limit int64, v any) bool {
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		writeErr(w, http.StatusRequestEntityTooLarge, errors.New("request body too large"))
 		return false
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
+	if err := chain.StrictUnmarshal(raw, v); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return false
 	}
@@ -72,6 +69,7 @@ func (n *Node) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/authorities", n.handleAuthorities)
 	mux.HandleFunc("GET /api/v1/rotations", n.handleRotations)
 	mux.HandleFunc("POST /api/v1/rotations", n.handlePostRotation)
+	n.registerExplorer(mux)
 	if n.opt.Web {
 		mux.Handle("/", webapp.Handler())
 	}
@@ -99,14 +97,18 @@ type statusRecorder struct {
 func (s *statusRecorder) WriteHeader(c int) { s.status = c; s.ResponseWriter.WriteHeader(c) }
 
 // accessLog logs every write request and every failed request. Successful GETs
-// are not logged: the web app polls every few seconds.
+// are not logged: the web app polls every few seconds. Client addresses are
+// personal data, so they appear only in lines about failed requests.
 func accessLog(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		start := time.Now()
 		h.ServeHTTP(rec, r)
-		if r.Method != http.MethodGet && r.Method != http.MethodOptions || rec.status >= 400 {
+		switch {
+		case rec.status >= 400: // error handler: the caller's address is kept for debugging
 			log.Printf("http: %s %s from %s -> %d (%s)", r.Method, r.URL.Path, clientAddr(r), rec.status, time.Since(start).Round(time.Millisecond))
+		case r.Method != http.MethodGet && r.Method != http.MethodOptions: // success: no client address (PII)
+			log.Printf("http: %s %s -> %d (%s)", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
 		}
 	})
 }
@@ -195,7 +197,7 @@ func (n *Node) handlePostBlock(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, chain.ErrKnown):
 		writeJSON(w, 200, map[string]string{"status": "known"})
 	case errors.Is(err, chain.ErrUnknownParent):
-		log.Printf("block %s (height %d) from %s has an unknown parent %s: syncing", b.Hash().Short(), b.Header.Height, clientAddr(r), b.Header.Prev.Short())
+		log.Printf("block %s (height %d) has an unknown parent %s: syncing", b.Hash().Short(), b.Header.Height, b.Header.Prev.Short())
 		n.kickSync() // we are behind: catch up from our peers
 		writeJSON(w, 202, map[string]string{"status": "unknown-parent"})
 	case err != nil:

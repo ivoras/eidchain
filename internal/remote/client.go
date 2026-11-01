@@ -73,29 +73,41 @@ type APIError struct {
 func (e *APIError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message) }
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) (int, error) {
+	status, raw, err := c.fetch(ctx, method, path, in)
+	if err != nil || out == nil {
+		return status, err
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return status, fmt.Errorf("decode response: %w", err)
+	}
+	return status, nil
+}
+
+// fetch performs a request and returns the raw body of a 2xx answer.
+func (c *Client) fetch(ctx context.Context, method, path string, in any) (int, []byte, error) {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		body = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.Base+path, body)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
 	if err != nil {
-		return resp.StatusCode, err
+		return resp.StatusCode, nil, err
 	}
 	if resp.StatusCode/100 != 2 {
 		var e struct {
@@ -105,14 +117,9 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) (int,
 		if json.Unmarshal(raw, &e) == nil && e.Error != "" {
 			msg = e.Error
 		}
-		return resp.StatusCode, &APIError{resp.StatusCode, msg}
+		return resp.StatusCode, nil, &APIError{resp.StatusCode, msg}
 	}
-	if out != nil {
-		if err := json.Unmarshal(raw, out); err != nil {
-			return resp.StatusCode, fmt.Errorf("decode response: %w", err)
-		}
-	}
-	return resp.StatusCode, nil
+	return resp.StatusCode, raw, nil
 }
 
 func (c *Client) Info(ctx context.Context) (Info, error) {
@@ -141,9 +148,15 @@ func (c *Client) HashAt(ctx context.Context, height uint64) (chain.Hash, error) 
 
 // Blocks fetches canonical blocks from height from.
 func (c *Client) Blocks(ctx context.Context, from uint64, limit int) ([]*chain.Block, error) {
+	_, raw, err := c.fetch(ctx, "GET", fmt.Sprintf("/api/v1/blocks?from=%d&limit=%d", from, limit), nil)
+	if err != nil {
+		return nil, err
+	}
 	var bs []*chain.Block
-	_, err := c.do(ctx, "GET", fmt.Sprintf("/api/v1/blocks?from=%d&limit=%d", from, limit), nil, &bs)
-	return bs, err
+	if err := chain.StrictUnmarshal(raw, &bs); err != nil { // blocks from a peer get the strict rules too
+		return nil, fmt.Errorf("decode blocks: %w", err)
+	}
+	return bs, nil
 }
 
 // PostBlock pushes a block; the returned status is "added", "known" or "unknown-parent".

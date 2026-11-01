@@ -38,15 +38,16 @@ func FetchOCSP(ctx context.Context, client *http.Client, cert, issuer *x509.Cert
 		start := time.Now()
 		resp, err := client.Do(httpReq)
 		if err != nil {
+			// Error path: the serial number is kept, to identify the certificate being debugged.
 			log.Printf("ocsp: %s for serial %s: request failed after %s: %v", url, cert.SerialNumber.Text(16), time.Since(start).Round(time.Millisecond), err)
 			lastErr = err
 			continue
 		}
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
-		log.Printf("ocsp: %s for serial %s: HTTP %d, %d bytes, content-type %q, %s", url, cert.SerialNumber.Text(16),
-			resp.StatusCode, len(body), resp.Header.Get("Content-Type"), time.Since(start).Round(time.Millisecond))
 		if err != nil || resp.StatusCode != http.StatusOK {
+			log.Printf("ocsp: %s for serial %s: HTTP %d, %d bytes, content-type %q, %s", url, cert.SerialNumber.Text(16),
+				resp.StatusCode, len(body), resp.Header.Get("Content-Type"), time.Since(start).Round(time.Millisecond))
 			lastErr = fmt.Errorf("OCSP responder %s: HTTP %d", url, resp.StatusCode)
 			continue
 		}
@@ -55,6 +56,7 @@ func FetchOCSP(ctx context.Context, client *http.Client, cert, issuer *x509.Cert
 			lastErr = fmt.Errorf("OCSP responder %s: %w", url, err)
 			continue
 		}
+		log.Printf("ocsp: %s: good, %d bytes, %s", url, len(body), time.Since(start).Round(time.Millisecond)) // success: no serial (PII)
 		return body, nil
 	}
 	return nil, fmt.Errorf("OCSP check failed: %w", lastErr)

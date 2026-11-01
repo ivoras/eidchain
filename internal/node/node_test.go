@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -238,5 +239,172 @@ func TestRejectedPayloadIsExplainedInTheLog(t *testing.T) {
 	// Neither the payload text nor signature bytes belong in the log.
 	if strings.Contains(out, "hi\"}") || strings.Contains(out, "MII") {
 		t.Error("log leaks payload text or signature bytes")
+	}
+}
+
+// newSoloNode is a one-authority node with a test PKI and a signing card.
+func newSoloNode(t *testing.T) (*Node, testpki.Leaf, *testpki.PKI) {
+	t.Helper()
+	pki := testpki.New(t)
+	k, _ := chain.GenerateKey()
+	pub, _ := chain.EncodePublicKey(&k.PublicKey)
+	g, err := chain.NewGenesis("solo", []chain.Authority{{PublicKey: pub}}, []string{pki.RootPEM, pki.InterPEM}, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if _, err := chain.Init(dir, g); err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.SavePrivateKey(filepath.Join(dir, "keys", "a.key"), k); err != nil {
+		t.Fatal(err)
+	}
+	n, err := New(Options{Data: dir, Listen: "unused", BlockInterval: time.Minute, SyncInterval: time.Hour, OCSP: "skip", Web: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n, pki.Leaf(t, "PERA PERIC", x509.KeyUsageContentCommitment, false), pki
+}
+
+func post(h http.Handler, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("POST", path, strings.NewReader(body))
+	req.RemoteAddr = "192.0.2.77:5555"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func get(h http.Handler, path string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+	return rec
+}
+
+// The API refuses ambiguous JSON (duplicate keys, case-variant names).
+func TestAPIRejectsAmbiguousJSON(t *testing.T) {
+	n, _, _ := newSoloNode(t)
+	h := n.Handler()
+	for name, body := range map[string]string{
+		"duplicate key": `{"payload":"{}","payload":"{}","signature":""}`,
+		"case variant":  `{"Payload":"{}","signature":""}`,
+		"unknown field": `{"payload":"{}","signature":"","x":1}`,
+	} {
+		rec := post(h, "/api/v1/payloads", body)
+		if rec.Code != 400 {
+			t.Errorf("%s: HTTP %d, want 400 (%s)", name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// Success paths must not log personal data (signer name, serial, client address);
+// the error paths keep it for debugging.
+func TestLogsContainNoPIIOnSuccess(t *testing.T) {
+	n, card, pki := newSoloNode(t)
+	h := n.Handler()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	p := `{"type":"message","text":"private words"}`
+	good, _ := json.Marshal(chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, card, []byte(p)))})
+	if rec := post(h, "/api/v1/payloads", string(good)); rec.Code != 200 {
+		t.Fatalf("submit: %d %s", rec.Code, rec.Body.String())
+	}
+	n.produce()
+	success := buf.String()
+	t.Log("\n" + success)
+	for _, pii := range []string{"PERA PERIC", card.Cert.SerialNumber.Text(16), "192.0.2.77", "private words"} {
+		if strings.Contains(success, pii) {
+			t.Errorf("success-path log contains %q", pii)
+		}
+	}
+	if !strings.Contains(success, "accepted") || !strings.Contains(success, "cut block") {
+		t.Error("expected log lines are missing")
+	}
+
+	// A rejection logs the details needed to debug it, including the caller and the certificate.
+	buf.Reset()
+	stranger := testpki.New(t).Leaf(t, "STRANGER NAME", x509.KeyUsageContentCommitment, false)
+	bad, _ := json.Marshal(chain.PayloadEntry{Payload: p + " ", Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, stranger, []byte(p+" ")))})
+	if rec := post(h, "/api/v1/payloads", string(bad)); rec.Code != 422 {
+		t.Fatalf("expected 422, got %d", rec.Code)
+	}
+	failure := buf.String()
+	for _, want := range []string{"REJECTED from 192.0.2.77", "STRANGER NAME", "http: POST /api/v1/payloads from 192.0.2.77 -> 422"} {
+		if !strings.Contains(failure, want) {
+			t.Errorf("error-path log lacks %q", want)
+		}
+	}
+	_ = pki
+}
+
+func TestExplorerAPI(t *testing.T) {
+	n, card, _ := newSoloNode(t)
+	h := n.Handler()
+	p := `{"type":"message","text":"hello explorer"}`
+	e := chain.PayloadEntry{Payload: p, Signature: base64.StdEncoding.EncodeToString(testpki.CadesSign(t, card, []byte(p)))}
+	body, _ := json.Marshal(e)
+	if rec := post(h, "/api/v1/payloads", string(body)); rec.Code != 200 {
+		t.Fatal(rec.Body.String())
+	}
+	id := e.ID().String()
+
+	// Pending transaction.
+	var tx map[string]any
+	rec := get(h, "/api/v1/explorer/tx/"+id)
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &tx) != nil || tx["status"] != "pending" || tx["valid"] != true {
+		t.Fatalf("pending tx: %d %s", rec.Code, rec.Body.String())
+	}
+	n.produce()
+
+	// Confirmed transaction with its certificate and block position.
+	rec = get(h, "/api/v1/explorer/tx/"+id)
+	tx = nil
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &tx) != nil || tx["status"] != "confirmed" || tx["height"].(float64) != 1 {
+		t.Fatalf("confirmed tx: %d %s", rec.Code, rec.Body.String())
+	}
+	cert, _ := tx["certificate"].(map[string]any)
+	if cert == nil || !strings.Contains(cert["subject"].(string), "PERA PERIC") {
+		t.Fatalf("certificate missing from tx view: %v", tx)
+	}
+
+	// Block by height and by hash; list; search.
+	var blk map[string]any
+	rec = get(h, "/api/v1/explorer/block/1")
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &blk) != nil || blk["canonical"] != true || len(blk["transactions"].([]any)) != 1 {
+		t.Fatalf("block: %d %s", rec.Code, rec.Body.String())
+	}
+	hash := blk["hash"].(string)
+	if rec = get(h, "/api/v1/explorer/block/"+hash); rec.Code != 200 {
+		t.Fatalf("block by hash: %d", rec.Code)
+	}
+	var list struct {
+		Blocks []map[string]any `json:"blocks"`
+		Height float64          `json:"height"`
+	}
+	rec = get(h, "/api/v1/explorer/blocks?limit=5")
+	if json.Unmarshal(rec.Body.Bytes(), &list) != nil || len(list.Blocks) != 1 || list.Height != 1 {
+		t.Fatalf("blocks: %s", rec.Body.String())
+	}
+	for q, kind := range map[string]string{"1": "block", hash: "block", id: "tx", n.store.P.GenesisHash.String(): "node"} {
+		var sr map[string]string
+		rec = get(h, "/api/v1/explorer/search?q="+q)
+		if json.Unmarshal(rec.Body.Bytes(), &sr) != nil || sr["kind"] != kind {
+			t.Errorf("search %.12s: want %s, got %s", q, kind, rec.Body.String())
+		}
+	}
+	keyID := n.store.HeadState().IDs[0]
+	var sr map[string]string
+	if rec = get(h, "/api/v1/explorer/search?q="+keyID); json.Unmarshal(rec.Body.Bytes(), &sr) != nil || sr["kind"] != "authority" {
+		t.Errorf("authority search: %s", rec.Body.String())
+	}
+	if rec = get(h, "/api/v1/explorer/search?q=nonsense"); rec.Code != 404 {
+		t.Errorf("unknown query: %d", rec.Code)
+	}
+	if rec = get(h, "/api/v1/explorer/block/99"); rec.Code != 404 {
+		t.Errorf("missing block: %d", rec.Code)
+	}
+	if rec = get(h, "/api/v1/explorer/authorities"); rec.Code != 200 || !strings.Contains(rec.Body.String(), keyID) {
+		t.Errorf("authorities: %d %s", rec.Code, rec.Body.String())
 	}
 }

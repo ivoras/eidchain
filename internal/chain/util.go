@@ -1,27 +1,10 @@
 package chain
 
 import (
-	"bytes"
 	"encoding/base64"
-	"encoding/json"
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 )
-
-// strictUnmarshal rejects unknown fields and trailing data.
-func strictUnmarshal(raw []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return err
-	}
-	if _, err := dec.Token(); err != io.EOF {
-		return errors.New("trailing data after JSON value")
-	}
-	return nil
-}
 
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

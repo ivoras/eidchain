@@ -158,7 +158,7 @@ func readRotation(path string) (chain.Rotation, error) {
 	if err != nil {
 		return r, err
 	}
-	return r, json.Unmarshal(raw, &r)
+	return r, chain.StrictUnmarshal(raw, &r)
 }
 
 func writeRotation(path string, r chain.Rotation) error {

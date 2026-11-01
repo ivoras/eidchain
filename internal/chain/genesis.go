@@ -50,7 +50,7 @@ func LoadGenesis(path string) (*Genesis, error) {
 // nodes cannot disagree on what a hash covers.
 func ParseGenesis(raw []byte) (*Genesis, error) {
 	var g Genesis
-	if err := strictUnmarshal(raw, &g); err != nil {
+	if err := StrictUnmarshal(raw, &g); err != nil {
 		return nil, fmt.Errorf("genesis: %w", err)
 	}
 	if _, err := NewParams(&g); err != nil {
