@@ -169,6 +169,8 @@ eidchain rotate sign --key data/keys/authority-3.key rotation.json
 eidchain rotate submit --server http://host:8080 rotation.json
 ```
 
+`rotate sign` shows the change and asks before signing, because the new key's holder becomes an authority: compare the new key's ID with its owner over a channel you trust. `--yes` skips the question for scripts.
+
 Once the quorum is reached, the next block a node cuts includes the rotation. Put the new key's file into the signing nodes' keys directory so they can use it. A block that carries the rotation may still be signed by the key it retires: the change applies from the *next* block.
 
 ### Which eID certificates are accepted

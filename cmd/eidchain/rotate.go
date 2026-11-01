@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,7 +16,7 @@ import (
 
 const rotateUsage = `usage:
   eidchain rotate create --old KEY-ID-PREFIX --new-key FILE [--server URL] [--out rotation.json]
-  eidchain rotate sign   --key AUTHORITY.key rotation.json
+  eidchain rotate sign   --key AUTHORITY.key [--yes] rotation.json
   eidchain rotate submit [--server URL] rotation.json
 
 A rotation replaces one authority key by another. It needs approvals from at
@@ -95,12 +96,13 @@ func rotateCreate(args []string) error {
 func rotateSign(args []string) error {
 	fs := newFlagSet("rotate sign")
 	keyFile := fs.String("key", "", "this authority's private key file")
+	yes := fs.Bool("yes", false, "approve without asking (for scripts; check the file some other way first)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if *keyFile == "" || len(pos) != 1 {
-		return errors.New("usage: eidchain rotate sign --key AUTHORITY.key rotation.json")
+		return errors.New("usage: eidchain rotate sign --key AUTHORITY.key [--yes] rotation.json")
 	}
 	key, err := chain.LoadPrivateKey(*keyFile)
 	if err != nil {
@@ -109,6 +111,9 @@ func rotateSign(args []string) error {
 	id, _ := chain.KeyID(&key.PublicKey)
 	rot, err := readRotation(pos[0])
 	if err != nil {
+		return err
+	}
+	if err := confirmRotation(rot, id, *yes); err != nil {
 		return err
 	}
 	sig, err := chain.SignKeyChange(chain.Signer{ID: id, Key: key}, rot.Change)
@@ -120,6 +125,30 @@ func rotateSign(args []string) error {
 		return err
 	}
 	fmt.Printf("Approved as %s…; %s now holds %d approval(s).\n", id[:12], pos[0], len(rot.Signatures))
+	return nil
+}
+
+// confirmRotation shows what is about to be approved. A proposal is just a file
+// someone sent you, and approving it hands authority to whoever holds the new key.
+func confirmRotation(r chain.Rotation, signer string, yes bool) error {
+	pub, err := chain.DecodePublicKey(r.Change.NewKey)
+	if err != nil {
+		return fmt.Errorf("proposal: %w", err)
+	}
+	newID, err := chain.KeyID(pub)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("You are approving, as %s…:\n  chain    %s\n  sequence %d\n  replace  %s\n  with     %s\n", signer[:12], r.Change.Chain, r.Change.Seq, r.Change.Old, newID)
+	fmt.Printf("Whoever holds the new key becomes a chain authority. Check its ID with them over a channel you trust.\n")
+	if yes {
+		return nil
+	}
+	fmt.Print("Approve? [y/N] ")
+	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+		return errors.New("not approved; the file is unchanged")
+	}
 	return nil
 }
 
