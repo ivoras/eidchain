@@ -638,7 +638,9 @@ func TestClientAddrCannotBeSpoofed(t *testing.T) {
 
 func TestPoolSurvivesDamageAndMigrates(t *testing.T) {
 	dir := t.TempDir()
-	item := func(text string) poolItem { return poolItem{Entry: chain.PayloadEntry{Payload: text, Signature: "x" + text}} }
+	item := func(text string) poolItem {
+		return poolItem{Entry: chain.PayloadEntry{Payload: text, Signature: "x" + text}}
+	}
 	old, _ := json.Marshal([]poolItem{item("a")})
 	if err := os.WriteFile(filepath.Join(dir, "pending.json"), old, 0o644); err != nil {
 		t.Fatal(err)

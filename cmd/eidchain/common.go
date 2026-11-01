@@ -84,6 +84,9 @@ func serverArg(flagVal, dataDir string) string {
 		return flagVal
 	}
 	cfg, err := config.Load(dataDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "warning:", err)
+	}
 	if err == nil && len(cfg.Peers) > 0 {
 		return cfg.Peers[0]
 	}
