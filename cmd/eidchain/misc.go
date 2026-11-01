@@ -85,6 +85,12 @@ func cmdVerify(args []string) error {
 	if err != nil {
 		return fmt.Errorf("chain invalid after height %d: %w", h, err)
 	}
+	if len(st.Skipped) > 0 {
+		for _, line := range st.Skipped {
+			fmt.Fprintln(os.Stderr, "  ", line)
+		}
+		return fmt.Errorf("%d block file(s) are damaged or do not connect; only height %d could be checked", len(st.Skipped), h)
+	}
 	head, _ := st.Head()
 	fmt.Printf("OK: chain %s verified from the genesis to height %d (head %s) in %s\n",
 		st.P.GenesisHash.Short(), h, head.Short(), time.Since(start).Round(time.Millisecond))

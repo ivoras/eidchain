@@ -338,7 +338,7 @@ data/
   config.json        defaults
 ```
 
-Everything here is git-ignored. Blocks are re-validated when a node starts; invalid files are skipped with a warning.
+Everything here is git-ignored. Blocks are re-validated when a node starts; invalid files are skipped with a warning, and `eidchain verify` fails if there are any. `verify` cannot notice blocks missing from the tip of the chain, because nothing local records how long it was: `eidchain pull` from another node catches that.
 
 ## HTTP API
 

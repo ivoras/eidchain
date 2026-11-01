@@ -57,6 +57,10 @@ type Store struct {
 	Dir string
 	P   *Params
 
+	// Skipped lists the block files Open could not use and why. A node carries
+	// on without them, but `eidchain verify` must not call such a chain intact.
+	Skipped []string
+
 	// OnChange, if set, is called (without locks held) after a block is added.
 	OnChange func(AddResult)
 
@@ -98,10 +102,12 @@ func Open(dir string, expected Hash) (*Store, error) {
 		var b Block
 		if err := StrictUnmarshal(raw, &b); err != nil {
 			log.Printf("store: skipping %s: %v", filepath.Base(path), err)
+			s.Skipped = append(s.Skipped, fmt.Sprintf("%s: %v", filepath.Base(path), err))
 			continue
 		}
 		if want := strings.TrimSuffix(filepath.Base(path), ".json"); want != b.Hash().String() {
 			log.Printf("store: skipping %s: file name does not match block hash", filepath.Base(path))
+			s.Skipped = append(s.Skipped, filepath.Base(path)+": file name does not match block hash")
 			continue
 		}
 		loaded = append(loaded, &b)
@@ -110,6 +116,7 @@ func Open(dir string, expected Hash) (*Store, error) {
 	for _, b := range loaded {
 		if _, err := s.add(b, false); err != nil {
 			log.Printf("store: skipping block %s: %v", b.Hash().Short(), err)
+			s.Skipped = append(s.Skipped, fmt.Sprintf("%s.json: %v", b.Hash(), err))
 		}
 	}
 	return s, nil

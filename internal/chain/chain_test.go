@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -366,5 +367,26 @@ func TestPayloadCannotRepeatOnItsBranch(t *testing.T) {
 	// A sibling branch is a different history: the payload may appear there.
 	if _, err := e.store.AddBlock(e.blockOn(e.genesis.Hash(), 1, s[1], []chain.PayloadEntry{p}, nil)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenReportsDamagedBlocks(t *testing.T) {
+	e := newEnv(t, 3)
+	b1 := e.next(e.signers[0], []chain.PayloadEntry{e.payload("one")}, nil)
+	if _, err := e.store.AddBlock(b1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.AddBlock(e.next(e.signers[1], []chain.PayloadEntry{e.payload("two")}, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.dir, "blocks", b1.Hash().String()+".json"), []byte("{broken"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	re, err := chain.Open(e.dir, e.genesis.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(re.Skipped) != 2 { // the damaged file, and its child that no longer connects
+		t.Fatalf("skipped: %v", re.Skipped)
 	}
 }
