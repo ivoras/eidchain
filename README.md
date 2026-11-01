@@ -503,7 +503,7 @@ If a key ever does get pushed, treat it as compromised: rotate it (see [Key rota
 
 ## Future Plans
 
-### Keep only the tip of the chain in memory
+### Reduce memory requirements
 
 Today a node holds every block it has seen in memory, in full, and verifies them all again at startup, so memory use and startup time grow with the chain. A node does not need that to work: message text, signatures, certificates, OCSP responses and timestamp tokens can stay on disk until something asks for them.
 
