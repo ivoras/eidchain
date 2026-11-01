@@ -18,6 +18,19 @@ import (
 var (
 	ErrUnknownParent = errors.New("unknown parent block")
 	ErrKnown         = errors.New("block already known")
+	ErrReorgRefused  = errors.New("reorganisation refused")
+)
+
+// There is no proof of work, so height costs an attacker nothing: blocks may
+// share a timestamp, and keys stay valid forever on any branch that forks from
+// before they were rotated out. Fork choice alone would let a quorum of retired
+// keys rewrite history, so a running node refuses to go back past these limits.
+const (
+	// MaxReorgDepth is how many canonical blocks one reorganisation may replace.
+	MaxReorgDepth = 64
+	// RotationFinality is how many blocks must follow a key rotation before it
+	// can no longer be undone. This is what actually retires the old key.
+	RotationFinality = 6
 )
 
 type entry struct {
@@ -140,6 +153,18 @@ func (s *Store) add(b *Block, persist bool) (AddResult, error) {
 	if err != nil {
 		return AddResult{Hash: h}, err
 	}
+	if err := s.checkDuplicatesLocked(b, par); err != nil {
+		return AddResult{Hash: h}, err
+	}
+	head := s.blocks[s.canon[len(s.canon)-1]]
+	wins := b.Header.Height > head.height || (b.Header.Height == head.height && bytes.Compare(h[:], head.hash[:]) < 0)
+	// Only new blocks are judged: what was stored passed this when it arrived, and
+	// a block that fails it is not stored, so a restart cannot bring it back.
+	if persist && wins {
+		if err := s.checkReorgLocked(par); err != nil {
+			return AddResult{Hash: h}, err
+		}
+	}
 	if persist {
 		raw, _ := json.Marshal(b)
 		if err := writeFileAtomic(s.blockPath(h), append(raw, '\n'), 0o644); err != nil {
@@ -149,11 +174,57 @@ func (s *Store) add(b *Block, persist bool) (AddResult, error) {
 	e := &entry{block: b, hash: h, parent: b.Header.Prev, height: b.Header.Height, time: b.Header.Time, state: state}
 	s.blocks[h] = e
 	res := AddResult{Hash: h}
-	head := s.blocks[s.canon[len(s.canon)-1]]
-	if e.height > head.height || (e.height == head.height && bytes.Compare(h[:], head.hash[:]) < 0) {
+	if wins {
 		s.reorgLocked(e, &res)
 	}
 	return res, nil
+}
+
+func (s *Store) canonicalLocked(e *entry) bool {
+	return int(e.height) < len(s.canon) && s.canon[e.height] == e.hash
+}
+
+// checkDuplicatesLocked refuses a block that repeats a payload from its own
+// ancestry, on the branch it builds on rather than only the canonical chain.
+func (s *Store) checkDuplicatesLocked(b *Block, par *entry) error {
+	mine := make(map[Hash]bool, len(b.Payloads))
+	for _, p := range b.Payloads {
+		mine[p.ID()] = true
+	}
+	cur := par
+	for ; !s.canonicalLocked(cur); cur = s.blocks[cur.parent] {
+		for _, p := range cur.block.Payloads {
+			if mine[p.ID()] {
+				return fmt.Errorf("payload %s is already in block %s of this branch", p.ID().Short(), cur.hash.Short())
+			}
+		}
+	}
+	for id := range mine {
+		if bh, ok := s.ids[id]; ok && s.blocks[bh].height <= cur.height {
+			return fmt.Errorf("payload %s is already in block %s of this branch", id.Short(), bh.Short())
+		}
+	}
+	return nil
+}
+
+// checkReorgLocked refuses to leave the canonical chain if a child of par would
+// replace too many blocks, or a key rotation that has become final.
+func (s *Store) checkReorgLocked(par *entry) error {
+	cur := par
+	for !s.canonicalLocked(cur) {
+		cur = s.blocks[cur.parent]
+	}
+	replaced := s.canon[cur.height+1:]
+	if len(replaced) > MaxReorgDepth {
+		return fmt.Errorf("%w: it would replace %d blocks (limit %d)", ErrReorgRefused, len(replaced), MaxReorgDepth)
+	}
+	top := uint64(len(s.canon) - 1)
+	for _, h := range replaced {
+		if o := s.blocks[h]; len(o.block.Rotations) > 0 && top-o.height >= RotationFinality {
+			return fmt.Errorf("%w: it would undo the key rotation in block %d", ErrReorgRefused, o.height)
+		}
+	}
+	return nil
 }
 
 // parentInfoLocked builds the Parent view for a stored entry.
@@ -278,8 +349,15 @@ func (s *Store) Verify() (uint64, error) {
 	g := s.blocks[s.P.GenesisHash]
 	parent := Parent{Hash: g.hash, Height: 0, Time: g.time, State: s.P.Initial}
 	var signers []string
+	seen := map[Hash]bool{}
 	for h := 1; h < len(s.canon); h++ {
 		b := s.blocks[s.canon[h]].block
+		for _, p := range b.Payloads {
+			if seen[p.ID()] {
+				return uint64(h - 1), fmt.Errorf("block %d (%s): payload %s repeats an earlier block", h, b.Hash().Short(), p.ID().Short())
+			}
+			seen[p.ID()] = true
+		}
 		recent := signers
 		if w := s.P.RecentSignerWindow(); len(recent) > w {
 			recent = recent[len(recent)-w:]

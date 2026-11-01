@@ -141,7 +141,7 @@ A node accepts a block only if all of these hold:
 1. It builds on a known parent, height is parent + 1, and `time` is not before the parent's and not more than 5 minutes in the future.
 2. The signer is an authority **in the parent's authority state** and did not sign any of the previous `floor(N/2)` blocks. The block signature is valid.
 3. `payloadCount`, `rotationCount`, `payloadsRoot` and `rotationsRoot` match the body.
-4. Every payload: valid UTF-8, a JSON object, within the size cap; a valid detached CAdES-B-B signature (RSA PKCS#1 v1.5 or ECDSA with SHA-256/384/512; RSA-PSS is not supported); the signer certificate chains to the genesis trust anchors **judged at the block's timestamp**; non-repudiation key usage if the genesis requires it; no duplicate payload inside the block.
+4. Every payload: valid UTF-8, a JSON object, within the size cap; a valid detached CAdES-B-B signature (RSA PKCS#1 v1.5 or ECDSA with SHA-256/384/512; RSA-PSS is not supported); the signer certificate chains to the genesis trust anchors **judged at the block's timestamp**; non-repudiation key usage if the genesis requires it; no payload that already appears in the block or in its ancestors.
 5. Every rotation: for this chain, `seq` equals the number of rotations applied so far (no replays), replaces a current authority with a new P-256 key that is not already one, and carries valid approvals from at least `rotationQuorum` distinct keys of the parent's state.
 
 Revocation (OCSP) is deliberately **not** part of these rules, so validation is deterministic and works offline.
@@ -149,6 +149,8 @@ Revocation (OCSP) is deliberately **not** part of these rules, so validation is 
 ### Fork choice
 
 The canonical chain is the highest one; at equal height the lowest block hash wins. When the head changes, payloads and rotations from orphaned blocks go back to the pending pool unless they are on the new chain.
+
+Height costs nothing in proof of authority, so a running node also refuses to reorganise past two limits: it will not replace more than 64 blocks (`MaxReorgDepth`), and it will not undo a key rotation with 6 or more blocks after it (`RotationFinality`). The second limit is what makes a rotation final: until then, a quorum of the old keys could still fork from before it. These limits are local judgement rather than consensus rules. A node that was partitioned for longer than this refuses the other side's chain and logs `reorganisation refused`; repair it by pulling into a fresh directory. A node syncing from nothing has no chain to protect, so check the head against a source you trust.
 
 ### Key rotation
 
@@ -430,15 +432,15 @@ Both hooks run `scripts/check-no-private-keys.sh`, which you can also run by han
 git config core.hooksPath .githooks
 ```
 
-If a key ever does get pushed, treat it as compromised: rotate it (see [Key rotation](#key-rotation)) rather than just deleting the commit.
+If a key ever does get pushed, treat it as compromised: rotate it (see [Key rotation](#key-rotation)) rather than just deleting the commit. The rotation protects running nodes only once 6 blocks follow it, so cut those blocks promptly.
 
 ## Limitations
 
 - **Personal data is permanent.** Every signature embeds the signer's certificate, with their name and, on Croatian cards, their OIB. Blocks are public and immutable, which sits badly with GDPR erasure rights. Get legal advice before running this with real users; storing certificates off-chain would need a new block format.
 - **Not tested with a real eID card, real OCSP responder or a real HRIDCA-issued certificate.** The CAdES verifier is tested against signatures from the browser-side signer, and the CA chain code against a test hierarchy, but the full path with a live Croatian card has not been run. Expect to adjust something (for example certificate extensions that Go's X.509 verifier treats strictly).
 - **Time is whatever the signer's clock says.** There are no trusted timestamps; block times are checked only against the parent and a 5-minute future bound.
-- **No finality.** A longer chain can replace a shorter one at any depth (bounded in practice by the recent-signer rule).
-- **Duplicate records:** the same signed payload is rejected inside a block and in the pending pool, and when already on the canonical chain at submission, but this is not a consensus rule.
+- **Weak finality.** Running nodes limit reorganisations (see [Fork choice](#fork-choice)), but nothing proves to a new node which of two branches came first, and blocks have no minimum spacing.
+- **Key separation is up to you.** The majority rule means nothing if one machine holds a majority of the keys, as the PoC deployment does.
 - **OCSP is only checked at submission** by the first node. Other nodes verify the stored response offline and do not re-query.
 - **Trust anchors are fixed by the genesis.** Changing them means a new chain.
 - **Only replacement rotations.** The authority count stays constant; adding or removing authorities is not implemented.

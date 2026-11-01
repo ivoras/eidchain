@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -271,4 +272,99 @@ func TestKeyRotation(t *testing.T) {
 		t.Fatalf("rotation-only block rejected: %v", err)
 	}
 	_ = base64.StdEncoding
+}
+
+func rotationTo(t *testing.T, e *env, seq uint64, old string, approvers ...chain.Signer) (chain.Rotation, chain.Signer) {
+	t.Helper()
+	k, _ := chain.GenerateKey()
+	id, _ := chain.KeyID(&k.PublicKey)
+	pub, _ := chain.EncodePublicKey(&k.PublicKey)
+	r := chain.Rotation{Change: chain.KeyChange{Type: "replace", Chain: e.genesis.Hash(), Seq: seq, Old: old, NewKey: pub}}
+	for _, a := range approvers {
+		sig, err := chain.SignKeyChange(a, r.Change)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.AddSignature(sig)
+	}
+	return r, chain.Signer{ID: id, Key: k}
+}
+
+// Keys that were rotated out stay valid on any branch from before the rotation.
+// Once the rotation is final they must not be able to replace the chain.
+func TestRetiredKeysCannotRewriteTheChain(t *testing.T) {
+	e := newEnv(t, 3)
+	s := e.signers
+	r1, n0 := rotationTo(t, e, 0, s[0].ID, s[0], s[1])
+	r2, n1 := rotationTo(t, e, 1, s[1].ID, s[1], s[2])
+	first := e.next(s[2], []chain.PayloadEntry{e.payload("real 1")}, []chain.Rotation{r1, r2})
+	if _, err := e.store.AddBlock(first); err != nil {
+		t.Fatal(err)
+	}
+	current := []chain.Signer{n0, n1}
+	for i := 0; i < chain.RotationFinality; i++ {
+		if _, err := e.store.AddBlock(e.next(current[i%2], []chain.PayloadEntry{e.payload(fmt.Sprint("real ", i+2))}, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	honest, height := e.store.Head()
+
+	prev := e.genesis.Hash()
+	var refused error
+	for i := uint64(0); i <= height && refused == nil; i++ {
+		f := e.blockOn(prev, i+1, s[i%2], []chain.PayloadEntry{e.payload(fmt.Sprint("forged ", i))}, nil)
+		_, refused = e.store.AddBlock(f)
+		prev = f.Hash()
+	}
+	if !errors.Is(refused, chain.ErrReorgRefused) {
+		t.Fatalf("forged branch: %v", refused)
+	}
+	if head, _ := e.store.Head(); head != honest {
+		t.Fatal("the head moved to the forged branch")
+	}
+	re, err := chain.Open(e.dir, e.genesis.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head, _ := re.Head(); head != honest {
+		t.Fatal("after a restart the head moved to the forged branch")
+	}
+}
+
+func TestReorgDepthIsLimited(t *testing.T) {
+	e := newEnv(t, 3)
+	s := e.signers
+	for i := 0; i <= chain.MaxReorgDepth; i++ {
+		if _, err := e.store.AddBlock(e.next(s[i%2], []chain.PayloadEntry{e.payload(fmt.Sprint("real ", i))}, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, height := e.store.Head()
+	prev := e.genesis.Hash()
+	var refused error
+	for i := uint64(0); i <= height && refused == nil; i++ {
+		f := e.blockOn(prev, i+1, s[i%2+1], []chain.PayloadEntry{e.payload(fmt.Sprint("fork ", i))}, nil)
+		_, refused = e.store.AddBlock(f)
+		prev = f.Hash()
+	}
+	if !errors.Is(refused, chain.ErrReorgRefused) {
+		t.Fatalf("deep fork: %v", refused)
+	}
+}
+
+func TestPayloadCannotRepeatOnItsBranch(t *testing.T) {
+	e := newEnv(t, 3)
+	s := e.signers
+	p := e.payload("once")
+	b1 := e.next(s[0], []chain.PayloadEntry{p}, nil)
+	if _, err := e.store.AddBlock(b1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.AddBlock(e.next(s[1], []chain.PayloadEntry{p}, nil)); err == nil {
+		t.Fatal("a payload was accepted twice on one chain")
+	}
+	// A sibling branch is a different history: the payload may appear there.
+	if _, err := e.store.AddBlock(e.blockOn(e.genesis.Hash(), 1, s[1], []chain.PayloadEntry{p}, nil)); err != nil {
+		t.Fatal(err)
+	}
 }
